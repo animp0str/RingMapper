@@ -1,0 +1,6 @@
+﻿node_modules/
+dist/
+.ringmapper-backups/
+playwright-report/
+test-results/
+*.log

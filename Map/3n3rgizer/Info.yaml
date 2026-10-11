@@ -112,15 +112,17 @@ difficultyBeatmapSets:
         beatmapFilename: Ring/NormalRing.yaml
         noteJumpMovementSpeed: 12
         noteJumpStartBeatOffset: 0.4000000059604645
-        blockNum: 309
+        blockNum: 315
         mineNum: 35
-        obstacleNum: 318
+        obstacleNum: 319
         averageBlockNum: 3
         calories: 9173
         customData:
           editorOffset: 0
           requirements: []
         eventmapFilename: Ring/NormalRingEvent.yaml
+        noteNum: 313
+        ringNoteNum: 2
       - difficulty: Hard
         difficultyRank: 5
         beatmapFilename: Ring/HardRing.yaml

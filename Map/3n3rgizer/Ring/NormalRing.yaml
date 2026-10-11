@@ -4,11 +4,31 @@ customData:
   BPMChanges: []
   bookmarks: []
 notes:
+  - time: 0
+    lineIndex: 3
+    lineLayer: 2
+    type: 1
+    cutDirection: 8
+    groupId: 6de03d03-37b7-4ab5-a2e0-db41ad5f8202
+    groupNoteType: 1
+  - time: 0
+    lineIndex: 3
+    lineLayer: 1
+    type: 0
+    cutDirection: 8
+  - time: 6.5
+    lineIndex: 0
+    lineLayer: 0
+    type: 1
+    cutDirection: 8
+    groupId: 6de03d03-37b7-4ab5-a2e0-db41ad5f8202
   - time: 8
     lineIndex: 2
     lineLayer: 0
     type: 1
     cutDirection: 1
+    groupId: 6de03d03-37b7-4ab5-a2e0-db41ad5f8202
+    groupNoteType: 2
   - time: 9
     lineIndex: 1
     lineLayer: 0
@@ -349,6 +369,11 @@ notes:
     lineLayer: 0
     type: 3
     cutDirection: 1
+  - time: 99
+    lineIndex: 3
+    lineLayer: 2
+    type: 1
+    cutDirection: 8
   - time: 112
     lineIndex: 2
     lineLayer: 0
@@ -2650,6 +2675,11 @@ obstacles:
     type: 1
     duration: 0.03703703731298447
     width: 1
+  - time: 99
+    lineIndex: 3
+    duration: 1
+    width: 1
+    type: 1
   - time: 99.125
     lineIndex: 0
     type: 1
@@ -3316,3 +3346,12 @@ obstacles:
     duration: 0.03703703731298447
     width: 1
 waypoints: []
+ringNotes:
+  - time: 0
+    lineIndex: 21
+    ringNoteType: 0
+    type: 1
+  - time: 0
+    lineIndex: 19
+    ringNoteType: 0
+    type: 0
