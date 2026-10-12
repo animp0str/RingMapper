@@ -1,7 +1,8 @@
+import type { Overlap } from './diagnostics';
 import { handLane, handPositions } from './layout';
 import { items, kinds, type Kind, type Project, type Item } from './model';
 export type Selection = { kind: Kind; index: number };
-export type ViewState = { project: Project; beat: number; start: number; scale: number; division: number; selected?: Selection; selections?: Selection[]; active: Kind; tool: string; ringRotation: number; ringReverse: boolean };
+export type ViewState = { project: Project; beat: number; start: number; scale: number; division: number; selected?: Selection; selections?: Selection[]; active: Kind; mode: 'notes' | 'obstacles' | 'events'; overlaps: Overlap[]; ringRotation: number; ringReverse: boolean };
 const colors: Record<Kind, string> = { ringNotes: '#76dfca', notes: '#8dacf9', obstacles: '#d4a86b', events: '#b79beb' };
 export const eventTypes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 101];
 export const bands: Record<Kind, { top: number; height: number; lanes: number }> = { notes: { top: 42, height: 144, lanes: 10 }, ringNotes: { top: 205, height: 84, lanes: 36 }, obstacles: { top: 308, height: 44, lanes: 4 }, events: { top: 371, height: 90, lanes: 15 } };
@@ -52,10 +53,11 @@ export function drawTimeline(canvas: HTMLCanvasElement, s: ViewState, waveform: 
   ctx.font = '10px monospace';
   ctx.save(); ctx.beginPath(); ctx.rect(timelineMargin, 0, w - timelineMargin, h); ctx.clip();
   const step = s.scale / s.division >= 9 ? 1 / s.division : s.scale >= 10 ? 1 : 4;
-  for (let b = Math.ceil(s.start / step) * step; b <= end; b += step) {
-    const x = timelineMargin + (b - s.start) * s.scale, major = Math.abs(b % 4) < .0001;
+  for (let tick = Math.ceil(s.start / step); tick * step <= end; tick++) {
+    const b = tick * step;
+    const x = timelineMargin + (b - s.start) * s.scale, major = Math.abs(b / 4 - Math.round(b / 4)) < .0001;
     ctx.strokeStyle = major ? '#3b464f' : '#242d35'; ctx.beginPath(); ctx.moveTo(x, 30); ctx.lineTo(x, 465); ctx.stroke();
-    if (Number.isInteger(b) && (s.scale >= 24 || major)) { ctx.fillStyle = major ? '#b6c5ce' : '#667985'; text(`${b.toFixed(0)}`, x + 4, 20); }
+    if (Math.abs(b - Math.round(b)) < .0001 && (s.scale >= 24 || major)) { ctx.fillStyle = major ? '#b6c5ce' : '#667985'; text(`${b.toFixed(0)}`, x + 4, 20); }
   }
   for (const kind of kinds) {
     const b = bands[kind];

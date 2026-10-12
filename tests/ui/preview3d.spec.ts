@@ -1,12 +1,12 @@
 import { test, expect, type Page } from '@playwright/test';
-import { selectLastVisibleNote } from './helpers';
+import { selectLastVisibleNote, unitDepth, frontCamera } from './helpers';
 
 async function fresh(page: Page) {
-  await page.goto('/'); await expect(page.locator('#song-name')).toHaveText('曹操');
+  await page.goto('/'); await expect(page.locator('#song-name')).toHaveText('曹操'); await unitDepth(page);
   await page.locator('#new-project').click(); await page.locator('#apply-settings').click();
   await expect(page.locator('#song-name')).toHaveText('未命名歌曲'); await expect(page.locator('#note-count')).toHaveText('0');
   await expect(page.locator('#preview')).toHaveAttribute('data-renderer', 'webgl');
-  await page.locator('#camera-preset').selectOption('front');
+  await frontCamera(page);
 }
 async function slot(page: Page, column: number, layer: number) {
   return page.evaluate(async ([col, row]) => {
@@ -40,18 +40,18 @@ test('WebGL renders ten real 3D sectors, and all ten can be picked without using
   await expect(page.locator('[data-field="lineIndex"]')).toHaveValue('0'); expect(errors).toEqual([]);
 });
 
-test('wheel seeks without zoom; orbit, zoom buttons, WASD, right-button Shift/Space and presets control the camera', async ({ page }) => {
+test('wheel seeks without zoom; orbit, zoom buttons, WASD, right-button Shift/Space and reset control the camera', async ({ page }) => {
   await fresh(page); const box = await page.locator('#preview').boundingBox(); const x = box!.x + box!.width / 2, y = box!.y + box!.height / 2;
   const before = await camera(page);
   await page.mouse.move(x, y); await page.mouse.down({ button: 'right' }); await page.mouse.move(x + 100, y + 30, { steps: 12 }); await page.mouse.up({ button: 'right' });
   await expect.poll(async () => JSON.stringify((await camera(page)).position)).not.toBe(JSON.stringify(before.position));
   const orbited = await camera(page);
-  await page.locator('#beat-input').focus(); await page.mouse.move(x, y); await page.mouse.wheel(0, 400);
+  await page.locator('#beat-input').focus(); await page.mouse.move(x, y); await page.mouse.wheel(0, -400);
   await expect.poll(async () => Number(await page.locator('#beat-input').inputValue())).toBeCloseTo(1, 2);
   expect((await camera(page)).distance).toBeCloseTo(orbited.distance, 4);
-  await page.mouse.wheel(0, -100);
+  await page.mouse.wheel(0, 100);
   await expect.poll(async () => Number(await page.locator('#beat-input').inputValue())).toBeCloseTo(.75, 2);
-  await page.mouse.wheel(0, -400); await expect(page.locator('#beat-input')).toHaveValue('0.000');
+  await page.mouse.wheel(0, 400); await expect(page.locator('#beat-input')).toHaveValue('0.000');
   await page.locator('#camera-near').click();
   await expect.poll(async () => (await camera(page)).distance).toBeLessThan(orbited.distance - .1);
   await page.locator('#camera-far').click(); expect((await camera(page)).distance).toBeCloseTo(orbited.distance, 3);
@@ -77,11 +77,10 @@ test('wheel seeks without zoom; orbit, zoom buttons, WASD, right-button Shift/Sp
   await page.locator('#close-modal').click();
   await page.locator('#preview').focus(); const stoppedY = (await camera(page)).position[1];
   await page.waitForTimeout(120); expect((await camera(page)).position[1]).toBeCloseTo(stoppedY, 4);
-  await page.locator('#camera-preset').selectOption('top'); expect((await camera(page)).position[1]).toBeCloseTo(12, 1);
-  await page.locator('#camera-reset').click(); await expect(page.locator('#preview')).toHaveAttribute('data-camera', 'perspective');
+  await page.locator('#camera-reset').click(); await expect(page.locator('#preview')).toHaveAttribute('data-camera', 'center');
   await expect(page.locator('#note-count')).toHaveText('0');
   // Picking is done against the rotated camera, not old 2D pixel geometry.
-  const position = await slot(page, 0, 2); await page.locator('[data-tool="draw"]').click(); await page.mouse.click(box!.x + position.x, box!.y + position.y); await selectLastVisibleNote(page);
+  const position = await slot(page, 0, 2);  await page.mouse.click(box!.x + position.x, box!.y + position.y); await selectLastVisibleNote(page);
   await expect(page.locator('[data-field="lineIndex"]')).toHaveValue('0'); await expect(page.locator('[data-field="lineLayer"]')).toHaveValue('2');
 });
 
@@ -92,7 +91,7 @@ test('playhead moves mesh depth, and the lower platform produces foot notes with
   await page.locator('#beat-input').fill('0'); await page.locator('#beat-input').dispatchEvent('change'); const distant = await depth();
   await page.locator('#beat-input').fill('2'); await page.locator('#beat-input').dispatchEvent('change'); expect(await depth()).toBeGreaterThan(distant);
   await page.locator('#beat-input').fill('4'); await page.locator('#beat-input').dispatchEvent('change'); expect(await depth()).toBeCloseTo(0);
-  await page.locator('[data-tool="draw"]').click();
+
   const box = await page.locator('#preview').boundingBox();
   const foot = await page.evaluate(async () => { const layoutPath = '/src/layout.ts'; const spatialPreview = (document.querySelector('#preview') as HTMLCanvasElement).spatialPreview!; const { footX, stage } = await import(layoutPath); return spatialPreview.screenPosition({ x: footX(18), y: stage.footY - .1, z: .35 }); });
   await page.mouse.click(box!.x + foot.x, box!.y + foot.y); await selectLastVisibleNote(page, 'ringNotes');
@@ -127,18 +126,19 @@ test('playhead moves mesh depth, and the lower platform produces foot notes with
   await page.keyboard.press('Delete'); await expect(page.locator('#note-count')).toHaveText('1');
   await page.locator('#undo').click(); await expect(page.locator('#note-count')).toHaveText('2');
 
-  await page.locator('[data-kind="events"]').click(); await page.locator('#add-at-beat').click();
-  await expect(page.locator('.preview-events')).toContainText('0:1');
-  await page.locator('#beat-input').fill('5'); await page.locator('#beat-input').dispatchEvent('change'); await expect(page.locator('.preview-events')).toBeHidden();
+  await page.locator('[data-mode="events"]').click(); await page.locator('#add-at-beat').click();
+  await expect(page.locator('.preview-events')).toHaveCount(0);
+  await page.locator('#beat-input').fill('5'); await page.locator('#beat-input').dispatchEvent('change'); await expect(page.locator('.preview-events')).toHaveCount(0);
   await page.locator('#beat-input').fill('4'); await page.locator('#beat-input').dispatchEvent('change');
-  await page.locator('#camera-preset').selectOption('perspective'); await page.screenshot({ path: 'test-results/editor-3d.png', fullPage: true });
+  await page.locator('#camera-reset').click(); await page.screenshot({ path: 'test-results/editor-3d.png', fullPage: true });
 });
 
 
-test('sidebar difficulties and floating tools work with a timeline that resizes the 3D viewport', async ({ page }) => {
+test('song-panel difficulties and floating tools work with a timeline that resizes the 3D viewport', async ({ page }) => {
   await fresh(page);
-  await expect(page.locator('.library #difficulties')).toBeVisible();
-  await expect(page.locator('.library #add-difficulty')).toBeVisible();
+  await expect(page.locator('.scene-song #difficulties')).toBeVisible();
+  await expect(page.locator('#add-difficulty, #mode-name')).toHaveCount(0);
+  await expect(page.locator('.scene-song [data-create-mode="Ring"][data-create-difficulty="Hard"]')).toBeVisible();
   await expect(page.locator('.preview-panel #tools-panel')).toBeVisible();
   await expect(page.locator('.preview-panel #modal')).toHaveCount(1);
   const scene = await page.locator('#scene-workspace').boundingBox();
@@ -177,7 +177,7 @@ test('sidebar difficulties and floating tools work with a timeline that resizes 
   await page.screenshot({ path: 'test-results/scene-workspace.png' });
 });
 
-test('transparent ring and hand-note sectors share geometry without arrow meshes; rotation still picks correctly', async ({ page }) => {
+test('transparent ring and hand-note sectors share geometry without arrow meshes; opacity changes preserve picking', async ({ page }) => {
   await fresh(page);
   await page.locator('#add-at-beat').click();
   const geometry = await page.evaluate(() => {
@@ -193,14 +193,12 @@ test('transparent ring and hand-note sectors share geometry without arrow meshes
   await selectLastVisibleNote(page);
   // Direction metadata remains editable and is not rewritten by the visual change.
   await page.locator('[data-field="cutDirection"]').fill('3'); await page.locator('[data-field="cutDirection"]').dispatchEvent('change');
-  await page.locator('#view-settings').click();
-  await page.locator('#ring-opacity').fill('12'); await page.locator('#ring-rotation').fill('45');
-  await page.locator('#ring-reverse').selectOption('1'); await page.locator('#view-apply').click();
+  await page.locator('#view-settings').click(); await page.locator('#ring-opacity').fill('12'); await page.locator('#ring-opacity').dispatchEvent('input'); await page.locator('#view-apply').click();
   await page.locator('[data-field="time"]').fill('.25'); await page.locator('[data-field="time"]').dispatchEvent('change');
   const hit = await page.evaluate(async () => {
     const p = (document.querySelector('#preview') as HTMLCanvasElement).spatialPreview!;
     const layoutPath = '/src/layout.ts'; const { handWorldPosition } = await import(layoutPath);
-    const point = p.screenPosition({ ...handWorldPosition(0, 0, 45, true), z: -.25 * 1.65 });
+    const point = p.screenPosition({ ...handWorldPosition(0, 0), z: -.25 * 1.65 });
     return { hit: p.pick(point.x, point.y), opacity: p.ringOpacity };
   });
   expect(hit.opacity).toBe(.12); expect(hit.hit).toMatchObject({ kind: 'notes', index: 0, lineIndex: 0, lineLayer: 0 });

@@ -1,8 +1,8 @@
 version: 2.3.0
 officialId: ""
-songName: ≤‹≤Ÿ
+songName: ÊõπÊìç
 songSubName: ""
-songAuthorName: ¡÷ø°Ω‹
+songAuthorName: Êûó‰øäÊù∞
 levelAuthorName: waika/ani
 beatsPerMinute: 144
 songTimeOffset: 0
@@ -82,9 +82,9 @@ difficultyCiphermapSets:
         eventmapFilename: Ring/ExpertRingEvent.yaml
         noteJumpMovementSpeed: 14
         noteJumpStartBeatOffset: 0.5
-        blockNum: 811
+        blockNum: 812
         mineNum: 49
-        noteNum: 688
+        noteNum: 689
         ringNoteNum: 123
         obstacleNum: 113
         averageBlockNum: 5

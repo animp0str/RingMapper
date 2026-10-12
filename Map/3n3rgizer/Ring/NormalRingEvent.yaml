@@ -245,6 +245,9 @@ events:
   - time: 35
     type: 2
     value: 7
+  - time: 35.666666666666664
+    type: 1
+    value: 1
   - time: 36
     type: 3
     value: 3
@@ -256,9 +259,6 @@ events:
     value: 3
   - time: 36
     type: 3
-    value: 3
-  - time: 37
-    type: 2
     value: 3
   - time: 37
     type: 2

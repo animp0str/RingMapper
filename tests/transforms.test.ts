@@ -9,15 +9,15 @@ test('all mirror modes preserve the ten legal hand positions and are exactly rev
     const n = { time: 8.125, lineIndex, lineLayer, cutDirection, type, groupId: 'group-1', groupNoteType: 1, custom: { retained: true } };
     const transformed = mirroredItem('notes', n, mode);
     assert.ok(isHandPosition(transformed.lineIndex, transformed.lineLayer));
-    assert.equal(transformed.time, n.time); assert.equal(transformed.groupId, n.groupId);
+    assert.equal(transformed.time, n.time); assert.equal(transformed.type, n.type); assert.equal(transformed.cutDirection, n.cutDirection); assert.equal(transformed.groupId, n.groupId);
     assert.deepEqual(transformed.custom, n.custom);
     assert.deepEqual(mirroredItem('notes', transformed, mode), n);
   }
 });
-test('up-down reflects layers and stroke directions; diagonal reflects both axes and swaps hands', () => {
+test('mirrors change positions only and preserve colors and stroke directions', () => {
   const n = { time: 0, lineIndex: 0, lineLayer: 2, type: 0, cutDirection: 4 };
-  assert.deepEqual(mirroredItem('notes', n, 'up-down'), { ...n, lineLayer: 0, cutDirection: 6 });
-  assert.deepEqual(mirroredItem('notes', n, 'diagonal'), { ...n, lineIndex: 3, lineLayer: 0, type: 1, cutDirection: 7 });
+  assert.deepEqual(mirroredItem('notes', n, 'up-down'), { ...n, lineLayer: 0 });
+  assert.deepEqual(mirroredItem('notes', n, 'diagonal'), { ...n, lineIndex: 3, lineLayer: 0 });
   const withoutDirection = { time: 0, lineIndex: 3, lineLayer: 1, type: 1 };
   assert.equal(Object.hasOwn(mirroredItem('notes', withoutDirection, 'up-down'), 'cutDirection'), false);
 });
@@ -27,6 +27,7 @@ test('mirrors keep holds, obstacle widths, event data and extension fields intac
   const event = { time: 2, type: 101, value: 2 };
   for (const mode of modes) {
     assert.deepEqual(mirroredItem('ringNotes', mirroredItem('ringNotes', foot, mode), mode), foot);
+    assert.equal(mirroredItem('ringNotes', foot, mode).type, foot.type);
     assert.deepEqual(mirroredItem('obstacles', mirroredItem('obstacles', wall, mode), mode), wall);
     assert.deepEqual(mirroredItem('events', event, mode), event);
   }

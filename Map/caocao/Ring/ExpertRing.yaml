@@ -656,6 +656,11 @@ notes:
     lineLayer: 2
     type: 0
     cutDirection: 8
+  - time: 62
+    lineIndex: 2
+    lineLayer: 2
+    type: 1
+    cutDirection: 8
   - time: 64
     lineIndex: 1
     lineLayer: 0

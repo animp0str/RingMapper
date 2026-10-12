@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { promises as fs, createReadStream } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import JSZip from 'jszip';
 import { decodeText, readYaml, writeYaml, validateChart, sortedProject, updateMetadata, type Project, type Song, type ChartEntry } from '../src/model';
 const ROOT = path.resolve('Map');
@@ -110,12 +111,27 @@ async function save(input: Project & { assets?: Record<string, string> }) {
     return { revision: await revision(dir, primaryNames), backup, info: p.info };
   } finally { locks.delete(dir); }
 }
+export async function workspaceFolder(songId = '') {
+  const folder = songId ? await checked(ROOT, songId) : ROOT;
+  if (!(await fs.stat(folder)).isDirectory()) throw new Error('谱面目录不存在');
+  return folder;
+}
+async function openFolder(songId: string) {
+  const folder = await workspaceFolder(songId);
+  const executable = process.platform === 'win32' ? 'explorer.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(executable, [folder], { shell: false, windowsHide: true, stdio: 'ignore' });
+    child.once('error', reject); child.once('spawn', () => { child.unref(); resolve(); });
+  });
+  return { path: folder };
+}
 async function handler(req: IncomingMessage, res: ServerResponse, next: () => void) {
   const url = new URL(req.url ?? '/', 'http://localhost');
   if (!url.pathname.startsWith('/api/')) return next();
   const json = (data: unknown, status = 200) => { res.statusCode = status; res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(JSON.stringify(data)); };
   try {
     if (req.headers.origin && new URL(req.headers.origin).host !== req.headers.host) return json({ error: '不接受跨站请求' }, 403);
+    if (url.pathname === '/api/open-folder' && req.method === 'POST') { const input = await body(req); if (typeof input.song !== 'string') throw new Error('歌曲目录参数不合法'); return json(await openFolder(input.song)); }
     if (url.pathname === '/api/catalog' && req.method === 'GET') return json(await catalog());
     const id = url.searchParams.get('song') ?? '';
     if (url.pathname === '/api/project' && req.method === 'GET') {

@@ -1,5 +1,10 @@
 ﻿import type { Item } from './model';
 
+export const defaultDepthScale = 5;
+export const defaultPreviewRange = 8;
+// Dominant native obstacle duration: 27,015 of 35,587 walls in the bundled maps.
+export const defaultObstacleDuration = .04;
+
 /** Clockwise perimeter of the original 4-column, 3-layer grid. */
 export const handPositions: readonly (readonly [number, number])[] = [
   [0, 2], [1, 2], [2, 2], [3, 2], [3, 1],
@@ -30,3 +35,12 @@ export function durationExtent(n: Item, beat: number, spacing = stage.beatSpacin
   return { front, back, length: Math.max(.035, front - back), center: (front + back) / 2 };
 }
 
+
+/** Human-facing foot tracks omit zero; native lineIndex stays 0..35. */
+export function footTrack(lineIndex: number) { return lineIndex < 18 ? lineIndex - 18 : lineIndex - 17; }
+export function obstacleBounds(n: Item) {
+  const width = Math.max(.1, Number(n.width ?? 1) * stage.footWidth / 4);
+  const height = n.type === 1 ? 1.55 : 3.1;
+  return { x: -stage.footWidth / 2 + n.lineIndex * stage.footWidth / 4 + width / 2,
+    y: .15 + 3.1 - height / 2, width, height };
+}

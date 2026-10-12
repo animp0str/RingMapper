@@ -1,4 +1,4 @@
-import { isHandPosition } from './layout';
+import { isHandPosition, defaultObstacleDuration } from './layout';
 import { parse, stringify } from 'yaml';
 export type Item = { time: number; [key: string]: any };
 export type Kind = 'ringNotes' | 'notes' | 'obstacles' | 'events';
@@ -29,7 +29,7 @@ export function newItem(kind: Kind, time: number, lineIndex: number, type = 0): 
     if (!isHandPosition(lineIndex, 0)) throw new Error('无效的手部位置');
     return { time, lineIndex, lineLayer: 0, type, cutDirection: 8 };
   }
-  if (kind === 'obstacles') return { time, lineIndex, duration: 1, width: 1, type };
+  if (kind === 'obstacles') return { time, lineIndex, duration: defaultObstacleDuration, width: 1, type };
   return { time, type: lineIndex, value: 1 };
 }
 export function validateChart(chart: Chart, event: Record<string, any> = {}): string[] {
@@ -92,5 +92,7 @@ export class History {
   push(p: Project) { this.past.push(JSON.stringify(p)); if (this.past.length > 100) this.past.shift(); this.future = []; }
   undo(p: Project): Project | undefined { const s = this.past.pop(); if (!s) return; this.future.push(JSON.stringify(p)); return JSON.parse(s); }
   redo(p: Project): Project | undefined { const s = this.future.pop(); if (!s) return; this.past.push(JSON.stringify(p)); return JSON.parse(s); }
+  checkpoint() { return { past: [...this.past], future: [...this.future] }; }
+  restore(checkpoint: { past: string[]; future: string[] }) { this.past = [...checkpoint.past]; this.future = [...checkpoint.future]; }
   clear() { this.past = []; this.future = []; }
 }

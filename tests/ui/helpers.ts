@@ -16,3 +16,16 @@ export async function selectLastVisibleNote(page: Page, kind: 'notes' | 'ringNot
   await page.mouse.click(box!.x + point.x, box!.y + point.y);
   await page.keyboard.up('Alt');
 }
+
+/** Stable scale for existing screen-coordinate interaction fixtures. Defaults are covered separately. */
+export async function unitDepth(page: Page) {
+  await page.locator('#depth-zoom').evaluate((el: HTMLInputElement) => { el.value = '1'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+}
+
+/** A stable frontal camera fixture for geometric picking tests, independent of product presets. */
+export async function frontCamera(page: Page) {
+  await page.locator('#preview').evaluate((el: HTMLCanvasElement) => {
+    const p = el.spatialPreview!; p.controls.enableDamping = false; p.controls.update();
+    p.camera.position.set(0, 2.3, 10.5); p.controls.target.set(0, 2, 0); p.controls.update(); p.controls.enableDamping = true; p.render();
+  });
+}

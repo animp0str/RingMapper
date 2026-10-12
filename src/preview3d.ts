@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { items, type Kind, type Item } from './model';
-import type { ViewState } from './render';
-import { handPositions, handLane, handAngle, handWorldPosition, footX, noteDepth, durationExtent, stage, footNoteSize } from './layout';
+import { items, snap, type Kind, type Item } from './model';
+import { groupingOptions, groupHeads } from './groups';
+import { LightingRunway } from './lighting3d';
+import type { ViewState, Selection } from './render';
+import { handPositions, handLane, handAngle, handWorldPosition, footX, noteDepth, durationExtent, stage, footNoteSize, footTrack, obstacleBounds, defaultDepthScale, defaultPreviewRange, defaultObstacleDuration } from './layout';
 
 declare global { interface HTMLCanvasElement { spatialPreview?: SpatialPreview } }
 
-export type PreviewHit = { kind: Kind; lineIndex: number; lineLayer: number; index?: number };
+export type PreviewHit = { kind: Kind; lineIndex: number; lineLayer: number; index?: number; obstacleType?: 0 | 1; time?: number };
 type Instance = { position: THREE.Vector3; scale?: THREE.Vector3; rotation?: THREE.Quaternion; color: THREE.Color; hit?: PreviewHit };
 const handColors = [new THREE.Color('#ff1744'), new THREE.Color('#1261ff')];
 const amber = new THREE.Color('#e9b56e');
@@ -61,8 +63,33 @@ export class SpatialPreview {
   readonly ring = new THREE.Group();
   readonly noteRoot = new THREE.Group();
   readonly targets: THREE.Object3D[] = [];
-  lookAhead = 8;
-  depthScale = 1;
+  readonly lighting = new LightingRunway();
+  private wallArea = new THREE.Group();
+  private wallAreaTargets: THREE.Mesh[] = [];
+  private groupEdges: THREE.LineSegments[] = [];
+  private groupHeadMarkers: THREE.Mesh[] = [];
+  private groupEdgeMaterial = new THREE.LineBasicMaterial({ color: '#e4edfa', transparent: true, opacity: .28, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false });
+  private groupHaloMaterial = new THREE.LineBasicMaterial({ color: '#b4d9f8', transparent: true, opacity: .08, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false });
+  private groupHeadGeometry = new THREE.RingGeometry(.075, .098, 32);
+  private groupHeadMaterial = new THREE.MeshBasicMaterial({ color: '#e3f6ff', toneMapped: false, transparent: true, opacity: .8, side: THREE.DoubleSide, depthTest: false, depthWrite: false });
+  private obstacleTargets: THREE.Mesh[] = [];
+  private wallHover?: { x: number; y: number };
+  private wallPreview = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: '#ffca70', transparent: true, opacity: .085, depthWrite: false, side: THREE.DoubleSide }));
+  private padTextures: THREE.Texture[] = [];
+  private footLabels: { mesh: THREE.Mesh; canvas: HTMLCanvasElement; texture: THREE.CanvasTexture; track: number; active: boolean }[] = [];
+  private selectionEdges: THREE.LineSegments[] = [];
+  private edgeGeometry = { notes: new THREE.EdgesGeometry(ringSectorGeometry(.34)), ringNotes: new THREE.EdgesGeometry(new THREE.BoxGeometry(footNoteSize.width, footNoteSize.height, footNoteSize.depth)), obstacles: new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)) };
+  private edgeMaterial = new THREE.LineBasicMaterial({ color: '#62ffd4', toneMapped: false, depthTest: false, transparent: true, opacity: .95 });
+  private annotations = document.createElement('div');
+  private markers: HTMLSpanElement[] = [];
+  private anchors: { el: HTMLElement; position: THREE.Vector3; offset: number }[] = [];
+  private quickGroup = document.createElement('button');
+  private quickJoin = document.createElement('button');
+  private quickFill = document.createElement('button');
+  handOpacity = 1;
+  footOpacity = 1;
+  lookAhead = defaultPreviewRange;
+  depthScale = defaultDepthScale;
   get beatSpacing() { return stage.beatSpacing * this.depthScale; }
   private floor!: THREE.Mesh;
   private floorGrid!: THREE.GridHelper;
@@ -77,12 +104,12 @@ export class SpatialPreview {
   ringOpacity = .22;
   private groupLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#b4e9d3', transparent: true, opacity: .55 }));
   private beatLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#48635e', transparent: true, opacity: .45 }));
+  private snapLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#6b9185', transparent: true, opacity: .22 }));
   private keys = new Set<string>();
   private previousTick = 0;
   private lost = false;
   private disposed = false;
   private hud: HTMLDivElement;
-  private eventHud: HTMLDivElement;
   private ringSetting = '';
   private rightHeld = false;
 
@@ -96,7 +123,11 @@ export class SpatialPreview {
     const key = new THREE.DirectionalLight('#fff1df', 3); key.position.set(3, 7, 6); this.scene.add(key);
     const rim = new THREE.DirectionalLight('#66b8d8', 2); rim.position.set(-5, 4, -10); this.scene.add(rim);
     this.ring.name = 'hand-ring-ten-positions'; this.noteRoot.name = 'chart-objects';
-    this.scene.add(this.ring, this.noteRoot, this.groupLines, this.beatLines);
+    this.beatLines.name = 'beat-guides'; this.snapLines.name = 'snap-guides';
+    this.wallPreview.name = 'wall-placement-preview'; this.wallPreview.visible = false;
+    const previewEdge = new THREE.LineSegments(new THREE.EdgesGeometry(this.wallPreview.geometry), new THREE.LineBasicMaterial({ color: '#ffd486', transparent: true, opacity: .32, depthWrite: false }));
+    this.wallPreview.add(previewEdge);
+    this.scene.add(this.ring, this.noteRoot, this.groupLines, this.beatLines, this.snapLines, this.wallPreview, this.wallArea, this.lighting.root);
     this.makeStage();
     this.handBatch = new InstanceBatch(this.noteRoot, ringSectorGeometry(.32), new THREE.MeshStandardMaterial({ roughness: .4, metalness: .08 }), 'hand-notes');
     this.handBatch.mesh.scale.x = stage.ringScaleX;
@@ -113,17 +144,24 @@ export class SpatialPreview {
     this.controls.enableZoom = false; this.controls.enablePan = false;
     this.controls.addEventListener('change', this.render);
     this.hud = document.createElement('div'); this.hud.className = 'preview-hud'; this.hud.setAttribute('aria-live', 'off');
-    this.hud.innerHTML = '<span>WEBGL · 10 POSITIONS</span><span class="preview-beat">BEAT 0.00</span>';
-    this.eventHud = document.createElement('div'); this.eventHud.className = 'preview-events'; this.eventHud.hidden = true;
-    canvas.parentElement!.append(this.hud, this.eventHud);
+    this.hud.innerHTML = '<span class="preview-beat">BEAT 0.00</span>';
+    this.annotations.className = 'scene-annotations'; this.quickGroup.id = 'quick-group'; this.quickGroup.textContent = '＋ 打组'; this.quickGroup.hidden = true;
+    this.quickGroup.onclick = () => this.canvas.dispatchEvent(new CustomEvent('group-selection', { bubbles: true, detail: { action: this.quickGroup.dataset.action } }));
+    this.quickJoin.id = 'quick-join-group'; this.quickJoin.textContent = '加入组'; this.quickJoin.hidden = true;
+    this.quickJoin.onclick = () => this.canvas.dispatchEvent(new CustomEvent('group-selection', { bubbles: true, detail: { action: 'join' } }));
+    this.quickFill.id = 'quick-fill'; this.quickFill.textContent = '＋ 填充'; this.quickFill.hidden = true;
+    this.quickFill.onclick = () => this.canvas.dispatchEvent(new CustomEvent('fill-selection', { bubbles: true }));
+    this.annotations.append(this.quickGroup, this.quickJoin, this.quickFill); canvas.parentElement!.append(this.annotations);
+    canvas.parentElement!.append(this.hud);
     canvas.dataset.renderer = 'webgl'; canvas.dataset.handPositions = '10';
     canvas.addEventListener('keydown', this.keyDown); canvas.addEventListener('keyup', this.keyUp);
     canvas.addEventListener('blur', this.clearKeys); window.addEventListener('blur', this.clearKeys);
     canvas.addEventListener('pointerdown', this.focusCanvas);
+    canvas.addEventListener('pointermove', this.hoverWall); canvas.addEventListener('pointerleave', this.clearWallHover);
     window.addEventListener('mouseup', this.releaseCamera);
     canvas.addEventListener('pointercancel', this.clearKeys);
     canvas.addEventListener('webglcontextlost', this.contextLost); canvas.addEventListener('webglcontextrestored', this.contextRestored);
-    this.setCamera('perspective'); this.resize(); this.canvas.spatialPreview = this;
+    this.resetCamera(); this.resize(); this.canvas.spatialPreview = this;
   }
 
   private makeStage() {
@@ -138,6 +176,32 @@ export class SpatialPreview {
       pad.userData.hit = { kind: 'ringNotes', lineIndex: i, lineLayer: 0 } satisfies PreviewHit;
       this.scene.add(pad); this.targets.push(pad);
     }
+    for (let i = 0; i < 4; i++) {
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(stage.footWidth / 4 - .055, .07, .7), new THREE.MeshStandardMaterial({ color: '#daa548', transparent: true, opacity: .8 }));
+      pad.position.set((i - 1.5) * stage.footWidth / 4, .12, .95); pad.name = `obstacle-slot-${i}`; pad.visible = false;
+      pad.userData.hit = { kind: 'obstacles', lineIndex: i, lineLayer: 0 } satisfies PreviewHit;
+      const labelCanvas = document.createElement('canvas'); labelCanvas.width = 128; labelCanvas.height = 96;
+      const c = labelCanvas.getContext('2d')!; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#182922'; c.font = 'bold 38px Consolas'; c.fillText(String(i + 1), 64, 48);
+      c.font = '18px sans-serif'; c.fillText('上半墙', 64, 14); c.fillText('全高墙', 64, 82);
+      c.strokeStyle = '#18292288'; c.beginPath(); c.moveTo(5, 48); c.lineTo(40, 48); c.moveTo(88, 48); c.lineTo(123, 48); c.stroke();
+      const texture = new THREE.CanvasTexture(labelCanvas); this.padTextures.push(texture);
+      const label = new THREE.Mesh(new THREE.PlaneGeometry(1.02, .66), new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false }));
+      label.rotation.x = -Math.PI / 2; label.position.y = .037; pad.add(label);
+      this.scene.add(pad); this.obstacleTargets.push(pad);
+    }
+    this.wallArea.name = 'wall-placement-area'; this.wallArea.visible = false;
+    const bottom = .20, top = stage.ringY + 1.9, middle = (bottom + top) / 2;
+    const lines: THREE.Vector3[] = [];
+    for (let i = 0; i < 4; i++) {
+      const plane = new THREE.Mesh(new THREE.PlaneGeometry(stage.footWidth / 4, top - bottom), new THREE.MeshBasicMaterial({ color: '#edc87c', transparent: true, opacity: .018, side: THREE.DoubleSide, depthWrite: false }));
+      plane.position.set((i - 1.5) * stage.footWidth / 4, middle, .08); plane.name = `wall-area-lane-${i}`;
+      plane.userData.hit = { kind: 'obstacles', lineIndex: i, lineLayer: 0 }; plane.userData.wallArea = true;
+      this.wallArea.add(plane); this.wallAreaTargets.push(plane);
+    }
+    for (let i = 0; i <= 4; i++) { const x = -stage.footWidth / 2 + i * stage.footWidth / 4; lines.push(new THREE.Vector3(x,bottom,.09),new THREE.Vector3(x,top,.09)); }
+    for (const y of [bottom, middle, top]) lines.push(new THREE.Vector3(-stage.footWidth/2,y,.09),new THREE.Vector3(stage.footWidth/2,y,.09));
+    this.wallArea.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(lines),new THREE.LineBasicMaterial({ color:'#c2b382', transparent:true, opacity:.3, depthWrite:false })));
+    const divider = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-stage.footWidth/2,middle,.1),new THREE.Vector3(stage.footWidth/2,middle,.1)]),new THREE.LineBasicMaterial({color:'#eacb85',transparent:true,opacity:.65,depthWrite:false})); divider.name='wall-height-divider'; this.wallArea.add(divider);
     const rails = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(-2.55, .025, 1), new THREE.Vector3(-2.55, .025, -20),
       new THREE.Vector3(2.55, .025, 1), new THREE.Vector3(2.55, .025, -20),
@@ -168,7 +232,7 @@ export class SpatialPreview {
   }
   setDepthScale(value: number) {
     if (!Number.isFinite(value)) return;
-    this.depthScale = THREE.MathUtils.clamp(value, .25, 3);
+    this.depthScale = THREE.MathUtils.clamp(value, .25, 10);
     if (this.state) this.update(this.state);
   }
   private updateBeatLabels(beats: number[]) {
@@ -192,8 +256,17 @@ export class SpatialPreview {
       label.texture.needsUpdate = true;
     });
   }
+  setNoteOpacity(hand: number, foot: number) {
+    this.handOpacity = THREE.MathUtils.clamp(hand, 0, 1); this.footOpacity = THREE.MathUtils.clamp(foot, 0, 1);
+    for (const [batch, opacity] of [[this.handBatch, this.handOpacity], [this.footBatch, this.footOpacity], [this.tailBatch, this.footOpacity * .5]] as const) {
+      const material = batch.material;
+      material.opacity = opacity; material.transparent = opacity < 1; material.depthWrite = opacity === 1; material.needsUpdate = true;
+    }
+    for (const label of this.footLabels) (label.mesh.material as THREE.Material).opacity = this.footOpacity;
+    this.render();
+  }
   setRingOpacity(opacity: number) {
-    this.ringOpacity = THREE.MathUtils.clamp(opacity, .05, .6);
+    this.ringOpacity = THREE.MathUtils.clamp(opacity, 0, 1);
     this.ring.children.forEach(object => { ((object as THREE.Mesh).material as THREE.MeshStandardMaterial).opacity = this.ringOpacity; });
     this.render();
   }
@@ -203,10 +276,78 @@ export class SpatialPreview {
     this.camera.position.copy(this.controls.target).add(offset); this.controls.update();
   }
 
+  private updateFootLabels(feet: Instance[]) {
+    while (this.footLabels.length < feet.length) {
+      const canvas = document.createElement('canvas'); canvas.width = 256; canvas.height = 128;
+      const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(.78, .4), new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false, toneMapped: false }));
+      (mesh.material as THREE.Material).opacity = this.footOpacity;
+      mesh.name = 'foot-track-label'; this.scene.add(mesh);
+      this.footLabels.push({ mesh, canvas, texture, track: NaN, active: false });
+    }
+    this.footLabels.forEach((label, i) => {
+      const note = feet[i]; label.active = !!note; label.mesh.visible = !!note; if (!note) return;
+      label.mesh.position.copy(note.position); label.mesh.position.y += .30; label.mesh.position.z += .1; label.mesh.userData.index = note.hit!.index;
+      const track = footTrack(note.hit!.lineIndex); label.mesh.userData.track = track;
+      if (track === label.track) return; label.track = track;
+      const c = label.canvas.getContext('2d')!; c.clearRect(0, 0, 256, 128); c.font = 'bold 86px Consolas, monospace'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.strokeStyle = '#10242ecc'; c.lineWidth = 8; c.strokeText(String(track), 128, 64); c.fillStyle = '#fff'; c.fillText(String(track), 128, 64); label.texture.needsUpdate = true;
+    });
+  }
+  private itemCenter(kind: string, n: Item) {
+    if (kind === 'events') return this.lighting.center(n.type, n.time);
+    const xy = kind === 'notes' ? handWorldPosition(n.lineIndex, n.lineLayer, this.state!.ringRotation, this.state!.ringReverse) : kind === 'ringNotes' ? { x: footX(n.lineIndex), y: stage.footY + .15 } : obstacleBounds(n);
+    if (!xy) return undefined;
+    const z = noteDepth(n.time, this.state!.beat, this.beatSpacing);
+    return new THREE.Vector3(xy.x, xy.y, kind !== 'notes' && Number(n.duration) > 0 ? Math.min(0, z) : z);
+  }
+  private updateSelection(state: ViewState, hands: Instance[], feet: Instance[], walls: Instance[]) {
+    const refs = state.selections ?? [], selected = new Set(refs.map(s => `${s.kind}:${s.index}`));
+    this.selectionEdges.forEach(edge => { edge.visible = false; }); this.markers.forEach(el => { el.hidden = true; }); this.quickGroup.hidden = true; this.quickJoin.hidden = true; this.quickFill.hidden = true; this.anchors = [];
+    let count = 0, markerCount = 0;
+    const addMarker = (text: string, cls: string, position: THREE.Vector3, offset: number) => {
+      const el = this.markers[markerCount] ?? document.createElement('span');
+      if (!this.markers[markerCount]) { this.markers.push(el); this.annotations.append(el); } markerCount++;
+      el.textContent = text; el.className = cls; this.anchors.push({ el, position, offset });
+    };
+    const centers: THREE.Vector3[] = [];
+    for (const [kind, records] of [['notes', hands], ['ringNotes', feet], ['obstacles', walls]] as const) for (const record of records) {
+      if (!selected.has(`${kind}:${record.hit!.index}`)) continue;
+      let edge = this.selectionEdges[count++];
+      if (!edge) { edge = new THREE.LineSegments(this.edgeGeometry[kind], this.edgeMaterial); edge.name = 'selected-note-edge'; edge.renderOrder = 10; this.scene.add(edge); this.selectionEdges.push(edge); }
+      edge.geometry = this.edgeGeometry[kind]; edge.visible = true; edge.position.copy(record.position); edge.quaternion.copy(record.rotation ?? quaternion); edge.scale.copy(record.scale ?? unit);
+      edge.matrixAutoUpdate = false; edge.matrix.compose(record.position, record.rotation ?? quaternion, record.scale ?? unit);
+      if (kind === 'notes') edge.matrix.premultiply(new THREE.Matrix4().makeScale(stage.ringScaleX, 1, 1));
+      const center = this.itemCenter(kind, items(state.project, kind)[record.hit!.index!]);
+      if (center) { centers.push(center); addMarker('✓', 'selection-marker', center, -16); }
+    }
+    const options = groupingOptions(state.project, refs);
+    const canFill = refs.length === 2 && refs.every(r => r.kind === 'notes');
+    if ((options.canCreate || options.canUngroup || canFill) && centers.length) {
+      this.quickGroup.disabled = false; this.quickGroup.dataset.action = options.canUngroup ? 'ungroup' : 'create';
+      this.quickGroup.textContent = options.canUngroup ? '取消组' : '＋ 打组';
+      this.quickGroup.title = options.canUngroup ? '解散选中音符所属的组' : '以选中音符创建新组，支持红蓝混合';
+      const visible = centers.filter(p => { const v = p.clone().project(this.camera); return v.z > -1 && v.z < 1 && Math.abs(v.x) < .9 && Math.abs(v.y) < .9; });
+      if (visible.length) {
+        const position = visible.reduce((a,b)=>a.add(b),new THREE.Vector3()).divideScalar(visible.length);
+        if (options.canCreate || options.canUngroup) this.anchors.push({ el:this.quickGroup,position,offset:-72 });
+        this.quickFill.style.marginLeft = options.canCreate || options.canUngroup ? '88px' : '0';
+        if (canFill) this.anchors.push({ el: this.quickFill, position, offset: -72 });
+        if(options.canJoin)this.anchors.push({ el:this.quickJoin,position,offset:-110 });
+      }
+    }
+    for (const overlap of state.overlaps) {
+      const note = items(state.project, overlap.kind)[overlap.indices[0]], dt = note.time - state.beat;
+      if (dt > this.lookAhead || dt + Number(note.duration ?? 0) < -.2) continue;
+      const center = this.itemCenter(overlap.kind, note);
+      if (center) addMarker(`! beat ${Number(note.time.toFixed(5))} 音符重叠`, 'overlap-marker', center, -34);
+    }
+  }
   update(state: ViewState) {
     this.state = state;
     if (this.disposed || this.lost) return;
     this.updateRing(state.ringRotation, state.ringReverse); this.resize();
+    this.obstacleTargets.forEach(pad => { pad.visible = state.mode === 'obstacles'; }); this.wallArea.visible = state.mode === 'obstacles';
     const hands: Instance[] = [], feet: Instance[] = [], tails: Instance[] = [], walls: Instance[] = [];
     const groups = new Map<string, { time: number; position: THREE.Vector3 }[]>();
     for (const kind of ['notes', 'ringNotes', 'obstacles'] as const) items(state.project, kind).forEach((n, index) => {
@@ -231,24 +372,36 @@ export class SpatialPreview {
           tails.push({ position: new THREE.Vector3(footX(n.lineIndex), stage.footY, extent.center), scale: new THREE.Vector3(1, 1, extent.length), color, hit });
         }
       } else {
-        const extent = durationExtent(n, state.beat, this.beatSpacing), width = Math.max(.1, Number(n.width) * stage.footWidth / 4);
-        walls.push({ position: new THREE.Vector3(-stage.footWidth / 2 + n.lineIndex * stage.footWidth / 4 + width / 2, 1.7, extent.center), scale: new THREE.Vector3(width, 3.1, extent.length), color: amber, hit });
+        const extent = durationExtent(n, state.beat, this.beatSpacing), bounds = obstacleBounds(n);
+        walls.push({ position: new THREE.Vector3(bounds.x, bounds.y, extent.center), scale: new THREE.Vector3(bounds.width, bounds.height, extent.length), color: amber, hit });
       }
     });
     this.handBatch.sync(hands); this.footBatch.sync(feet); this.tailBatch.sync(tails); this.wallBatch.sync(walls); this.wallWireBatch.sync(walls);
+    this.lighting.update(state, this.beatSpacing, this.lookAhead);
+    this.updateGroupAppearance(state, hands);
+    this.updateFootLabels(feet); this.updateSelection(state, hands, feet, walls);
     const links: THREE.Vector3[] = [];
     for (const list of groups.values()) { list.sort((a, b) => a.time - b.time); for (let i = 1; i < list.length; i++) links.push(list[i - 1].position, list[i].position); }
     this.replaceLines(this.groupLines, links);
     const beatPoints: THREE.Vector3[] = [], beats: number[] = [];
     for (let b = Math.floor(state.beat); b <= state.beat + this.lookAhead; b++) { beats.push(b); const z = noteDepth(b, state.beat, this.beatSpacing); beatPoints.push(new THREE.Vector3(-2.5, .025, z), new THREE.Vector3(2.5, .025, z)); }
+    // Integer beats keep their stronger lines and labels; subdivisions track SNAP.
+    // Bound drawing cost for arbitrarily large custom denominators without changing snapping.
+    const subdivisions: THREE.Vector3[] = [], firstTick = Math.ceil(state.beat * state.division), lastTick = Math.floor((state.beat + this.lookAhead) * state.division);
+    const stride = Math.max(1, Math.ceil((lastTick - firstTick + 1) / 4096));
+    for (let tick = firstTick; tick <= lastTick; tick += stride) {
+      const b = tick / state.division; if (Math.abs(b - Math.round(b)) < 1e-8) continue;
+      const z = noteDepth(b, state.beat, this.beatSpacing); subdivisions.push(new THREE.Vector3(-2.5, .026, z), new THREE.Vector3(2.5, .026, z));
+    }
+    this.snapLines.userData.step = 1 / state.division;
+    this.replaceLines(this.snapLines, subdivisions);
     this.replaceLines(this.beatLines, beatPoints); this.updateBeatLabels(beats);
     const depth = Math.max(42, (this.lookAhead + 2) * this.beatSpacing + 12);
     this.floor.scale.y = depth / 42; this.floor.position.z = 6 - depth / 2;
     this.floorGrid.scale.z = Math.max(1, depth / 40); this.floorGrid.position.z = this.floor.position.z;
     const fog = this.scene.fog as THREE.Fog; fog.far = Math.max(43, this.lookAhead * this.beatSpacing + 15); fog.near = Math.max(20, fog.far * .48);
-    this.hud.querySelector('.preview-beat')!.textContent = `BEAT ${state.beat.toFixed(2)} · 未来 ${this.lookAhead} 拍`;
-    const events = items(state.project, 'events').filter(n => n.time <= state.beat && n.time >= state.beat - .3);
-    this.eventHud.hidden = events.length === 0; this.eventHud.textContent = events.length ? `事件 ${events.slice(-8).map(n => `${n.type}:${n.value}`).join(' · ')}` : '';
+    this.camera.far = Math.max(100, depth + this.camera.position.length() + 50); this.camera.updateProjectionMatrix();
+    this.hud.querySelector('.preview-beat')!.textContent = `BEAT ${state.beat.toFixed(2)} · 未来 ${Number(this.lookAhead.toFixed(2))} 拍`;
     this.canvas.dataset.visibleNotes = String(hands.length + feet.length); this.render();
   }
   private replaceLines(lines: THREE.LineSegments, points: THREE.Vector3[]) {
@@ -264,8 +417,17 @@ export class SpatialPreview {
   render = () => {
     if (this.disposed || this.lost) return;
     this.camera.updateMatrixWorld(true);
+    this.updateWallPreview();
+    this.faceFootLabels();
+    this.groupHeadMarkers.forEach(marker => marker.quaternion.copy(this.camera.quaternion));
     for (const label of this.beatLabels) label.mesh.quaternion.copy(this.camera.quaternion);
     this.scene.updateMatrixWorld(true); this.renderer.render(this.scene, this.camera);
+    for (const { el, position, offset } of this.anchors) {
+      const projected = position.clone().project(this.camera), w = this.canvas.clientWidth, h = this.canvas.clientHeight;
+      const x = (projected.x + 1) / 2 * w, y = (1 - projected.y) / 2 * h;
+      el.hidden = projected.z < -1 || projected.z > 1 || x < 0 || x > w || y < 0 || y > h;
+      el.style.left = `${Math.min(w - 70, Math.max(70, x))}px`; el.style.top = `${Math.max(26, y + offset)}px`;
+    }
   };
   tick(now: number) {
     if (this.disposed || this.lost) return;
@@ -282,30 +444,110 @@ export class SpatialPreview {
     }
     this.controls.update();
   }
-  setCamera(preset: 'perspective' | 'front' | 'top') {
+  resetCamera() {
     this.clearKeys(); this.controls.enableDamping = false; this.controls.update();
-    const positions = { perspective: [4.6, 4.5, 8.8], front: [0, 2.3, 10.5], top: [0, 12, 2] };
-    this.camera.position.fromArray(positions[preset]);
-    this.controls.target.set(0, preset === 'top' ? .7 : 2, preset === 'front' ? 0 : -2.2);
-    this.controls.update(); this.controls.enableDamping = true; this.canvas.dataset.camera = preset; this.render();
+    const distance = Math.hypot(5.7, 11.9), pitch = Math.atan2(5.7, 11.9) + Math.PI / 18;
+    this.controls.target.set(0, 1.1, -3.3); this.camera.position.set(0, 1.1 + Math.sin(pitch) * distance, -3.3 + Math.cos(pitch) * distance);
+    this.controls.update(); this.controls.enableDamping = true; this.canvas.dataset.camera = 'center'; this.render();
+  }
+  focusLighting() {
+    this.clearKeys(); this.controls.enableDamping = false; this.controls.update();
+    const center = 4.4 + Math.max(0, this.lighting.trackCount - 10) * this.lighting.laneWidth / 2;
+    this.camera.position.set(center, 10.8, 13.8); this.controls.target.set(center, .15, -3.8);
+    this.controls.update(); this.controls.enableDamping = true; this.render();
+  }
+  visibleSelections(): Selection[] {
+    if (!this.state) return [];
+    const candidates = this.state.mode === 'events' ? this.lighting.visibleRecords() : (this.state.mode === 'obstacles' ? [this.wallBatch] : [this.handBatch, this.footBatch]).flatMap(batch => batch.records.flatMap(record => {
+      const hit = record.hit!; const position = this.itemCenter(hit.kind, items(this.state!.project, hit.kind)[hit.index!]);
+      return position ? [{ ref: { kind: hit.kind, index: hit.index! }, position }] : [];
+    }));
+    this.camera.updateMatrixWorld(true); const b = this.canvas.getBoundingClientRect();
+    return candidates.filter(({ position }) => {
+      const v = position.clone().project(this.camera); if(v.z < -1 || v.z > 1 || Math.abs(v.x) > 1 || Math.abs(v.y) > 1) return false;
+      const x = b.x + (v.x + 1) / 2 * b.width, y = b.y + (1 - v.y) / 2 * b.height;
+      return document.elementFromPoint(x, y) === this.canvas;
+    }).map(c=>c.ref);
+  }
+  private faceFootLabels() {
+    const occupied: { x:number; y:number; w:number; h:number }[] = [];
+    const selected = new Set((this.state?.selections ?? []).filter(s=>s.kind==='ringNotes').map(s=>s.index));
+    const labels = [...this.footLabels].sort((a,b) => Number(selected.has(b.mesh.userData.index)) - Number(selected.has(a.mesh.userData.index)) || a.mesh.position.distanceToSquared(this.camera.position) - b.mesh.position.distanceToSquared(this.camera.position));
+    for(const label of labels) {
+      label.mesh.visible = false; if(!label.active)continue;
+      label.mesh.quaternion.copy(this.camera.quaternion);
+      const v = label.mesh.position.clone().project(this.camera), depth = -label.mesh.position.clone().applyMatrix4(this.camera.matrixWorldInverse).z;
+      const h = .4 * this.canvas.clientHeight / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov)/2) * depth), w=h*1.95;
+      if(h<11 || v.z < -1 || v.z>1 || Math.abs(v.x)>1 || Math.abs(v.y)>1)continue;
+      const rect={x:(v.x+1)/2*this.canvas.clientWidth,y:(1-v.y)/2*this.canvas.clientHeight,w,h};
+      if(occupied.some(r=>Math.abs(r.x-rect.x)<(r.w+w)/2+3 && Math.abs(r.y-rect.y)<(r.h+h)/2+3))continue;
+      occupied.push(rect); label.mesh.visible=true;
+    }
+  }
+  private updateGroupAppearance(state: ViewState, hands: Instance[]) {
+    this.groupEdges.forEach(edge=>{edge.visible=false;}); this.groupHeadMarkers.forEach(marker=>{marker.visible=false;});
+    const heads=groupHeads(items(state.project,'notes')); let edgeIndex=0,headIndex=0;
+    for(const record of hands) {
+      const note=items(state.project,'notes')[record.hit!.index!]; if(!note.groupId)continue;
+      for(const halo of [false,true]) {
+        let edge=this.groupEdges[edgeIndex++];
+        if(!edge){edge=new THREE.LineSegments(this.edgeGeometry.notes,halo?this.groupHaloMaterial:this.groupEdgeMaterial);edge.name=halo?'grouped-note-halo':'grouped-note-outline';this.scene.add(edge);this.groupEdges.push(edge);}
+        edge.visible=true;edge.matrixAutoUpdate=false;edge.matrix.compose(record.position,record.rotation??quaternion,new THREE.Vector3(halo?1.012:1.002,halo?1.012:1.002,1.04));edge.matrix.premultiply(new THREE.Matrix4().makeScale(stage.ringScaleX,1,1));
+      }
+      if(heads.has(record.hit!.index!)) {
+        let marker=this.groupHeadMarkers[headIndex++];
+        if(!marker){marker=new THREE.Mesh(this.groupHeadGeometry,this.groupHeadMaterial);marker.name='group-head-marker';this.scene.add(marker);this.groupHeadMarkers.push(marker);}
+        marker.position.copy(this.itemCenter('notes',note)!); marker.position.addScaledVector(this.camera.position.clone().sub(marker.position).normalize(),.24); marker.visible=true; marker.userData.index=record.hit!.index;
+      }
+    }
   }
   /** Raycast actual scene geometry, respecting camera orbit, zoom and perspective. */
   pick(x: number, y: number, layer: 'all' | 'targets' | 'notes' = 'all'): PreviewHit | undefined {
     this.scene.updateMatrixWorld(true); this.camera.updateMatrixWorld(true);
     this.raycaster.setFromCamera(new THREE.Vector2(x / this.canvas.clientWidth * 2 - 1, -(y / this.canvas.clientHeight) * 2 + 1), this.camera);
-    const noteMeshes = [this.handBatch, this.footBatch, this.tailBatch, this.wallBatch].map(b => b.mesh);
-    const hits = layer === 'targets' ? this.raycaster.intersectObjects(this.targets, false) : this.raycaster.intersectObjects(noteMeshes, false);
-    if (layer === 'all') hits.push(...this.raycaster.intersectObjects(this.targets, false));
+    const mode = this.state?.mode ?? 'notes';
+    if (mode === 'events') return this.lighting.pick(this.raycaster, layer);
+    const targets = mode === 'obstacles' ? [...this.wallAreaTargets, ...this.obstacleTargets] : mode === 'notes' ? this.targets : [];
+    const noteMeshes = (mode === 'obstacles' ? [this.wallBatch] : mode === 'notes' ? [this.handBatch, this.footBatch, this.tailBatch, this.wallBatch] : []).map(b => b.mesh);
+    const hits = layer === 'targets' ? this.raycaster.intersectObjects(targets, false) : this.raycaster.intersectObjects(noteMeshes, false);
+    if (layer === 'all') hits.push(...this.raycaster.intersectObjects(targets, false));
     for (const hit of hits) {
       if (hit.instanceId !== undefined) { const batch = hit.object.userData.batch as InstanceBatch; const record = batch.records[hit.instanceId]; if (record?.hit) return record.hit; }
-      if (hit.object.userData.hit) return hit.object.userData.hit as PreviewHit;
+      if (hit.object.userData.hit) {
+        const target = hit.object.userData.hit as PreviewHit;
+        if (target.kind === 'obstacles') {
+          if (hit.object.userData.wallArea) return { ...target, obstacleType: hit.point.y >= hit.object.position.y ? 1 : 0 };
+          const center = this.screenPosition({ x: hit.object.position.x, y: hit.object.position.y + .035, z: hit.object.position.z });
+          return { ...target, obstacleType: y < center.y ? 1 : 0 };
+        }
+        return target;
+      }
     }
+  }
+  private hoverWall = (e: PointerEvent) => {
+    if (e.buttons) { this.clearWallHover(); return; }
+    const box = this.canvas.getBoundingClientRect(); this.wallHover = { x: e.clientX - box.left, y: e.clientY - box.top }; this.render();
+  };
+  private clearWallHover = () => { this.wallHover = undefined; if (this.wallPreview.visible) { this.wallPreview.visible = false; this.render(); } };
+  private updateWallPreview() {
+    this.wallPreview.visible = false;
+    this.wallAreaTargets.forEach(plane => { (plane.material as THREE.MeshBasicMaterial).opacity = .018; });
+    if (!this.wallHover || this.state?.mode !== 'obstacles' || this.rightHeld) return;
+    const hit = this.pick(this.wallHover.x, this.wallHover.y, 'targets');
+    if (hit?.kind !== 'obstacles') return;
+    (this.wallAreaTargets[hit.lineIndex].material as THREE.MeshBasicMaterial).opacity = .065;
+    const note = { time: snap(this.state.beat, this.state.division), lineIndex: hit.lineIndex, type: hit.obstacleType, width: 1, duration: defaultObstacleDuration };
+    const bounds = obstacleBounds(note), extent = durationExtent(note, this.state.beat, this.beatSpacing);
+    this.wallPreview.position.set(bounds.x, bounds.y, extent.center);
+    this.wallPreview.scale.set(bounds.width, bounds.height, extent.length);
+    this.wallPreview.userData.placement = note; this.wallPreview.visible = true;
   }
   /** Drag on the note's own depth plane, then snap to the format's valid positions. */
   dragPosition(x: number, y: number, kind: Kind, note: Item) {
-    if (!this.state || kind === 'events') return;
+    if (!this.state) return;
     this.camera.updateMatrixWorld(true);
     this.raycaster.setFromCamera(new THREE.Vector2(x / this.canvas.clientWidth * 2 - 1, 1 - y / this.canvas.clientHeight * 2), this.camera);
+    if (kind === 'events') { const hit = this.lighting.pick(this.raycaster, 'targets'); return hit ? { lineIndex: hit.lineIndex, lineLayer: 0, time: hit.time } : undefined; }
     const depth = kind === 'ringNotes' && note.ringNoteType === 1 ? Math.min(0, noteDepth(note.time, this.state.beat, this.beatSpacing)) : noteDepth(note.time, this.state.beat, this.beatSpacing);
     const point = this.raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -depth), new THREE.Vector3());
     if (!point) return;
@@ -342,16 +584,17 @@ export class SpatialPreview {
   };
   private keyUp = (e: KeyboardEvent) => { this.keys.delete(e.key.toLowerCase()); };
   private clearKeys = () => { this.keys.clear(); this.rightHeld = false; };
-  private contextLost = (e: Event) => { e.preventDefault(); this.lost = true; this.eventHud.hidden = true; this.canvas.dataset.renderer = 'context-lost'; this.hud.textContent = '3D 上下文暂时丢失，等待浏览器恢复'; };
-  private contextRestored = () => { this.lost = false; this.canvas.dataset.renderer = 'webgl'; this.hud.innerHTML = '<span>WEBGL · 10 POSITIONS</span><span class="preview-beat"></span>'; if (this.state) this.update(this.state); };
+  private contextLost = (e: Event) => { e.preventDefault(); this.lost = true; this.canvas.dataset.renderer = 'context-lost'; this.hud.textContent = '3D 上下文暂时丢失，等待浏览器恢复'; };
+  private contextRestored = () => { this.lost = false; this.canvas.dataset.renderer = 'webgl'; this.hud.innerHTML = '<span class="preview-beat"></span>'; if (this.state) this.update(this.state); };
   dispose() {
     delete this.canvas.spatialPreview;
     this.disposed = true; this.controls.removeEventListener('change', this.render); this.controls.dispose();
     this.canvas.removeEventListener('keydown', this.keyDown); this.canvas.removeEventListener('keyup', this.keyUp); this.canvas.removeEventListener('blur', this.clearKeys); window.removeEventListener('blur', this.clearKeys); this.canvas.removeEventListener('pointerdown', this.focusCanvas);
+    this.canvas.removeEventListener('pointermove', this.hoverWall); this.canvas.removeEventListener('pointerleave', this.clearWallHover);
     window.removeEventListener('mouseup', this.releaseCamera); this.canvas.removeEventListener('pointercancel', this.clearKeys);
     this.canvas.removeEventListener('webglcontextlost', this.contextLost); this.canvas.removeEventListener('webglcontextrestored', this.contextRestored);
     const geometries = new Set<THREE.BufferGeometry>(), materials = new Set<THREE.Material>();
     this.scene.traverse(object => { const mesh = object as THREE.Mesh; if (mesh.geometry) geometries.add(mesh.geometry); if (mesh.material) for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) materials.add(m); if (object instanceof THREE.InstancedMesh) object.dispose(); });
-    geometries.forEach(g => g.dispose()); materials.forEach(m => m.dispose()); this.beatLabels.forEach(label => label.texture.dispose()); this.renderer.dispose(); this.hud.remove(); this.eventHud.remove();
+    geometries.forEach(g => g.dispose()); materials.forEach(m => m.dispose()); this.beatLabels.forEach(label => label.texture.dispose()); this.padTextures.forEach(texture => texture.dispose()); this.footLabels.forEach(label => label.texture.dispose()); Object.values(this.edgeGeometry).forEach(g => g.dispose()); this.edgeMaterial.dispose(); this.lighting.disposeTextures(); this.groupEdgeMaterial.dispose(); this.groupHaloMaterial.dispose(); this.groupHeadGeometry.dispose(); this.groupHeadMaterial.dispose(); this.renderer.dispose(); this.hud.remove(); this.annotations.remove();
   }
 }

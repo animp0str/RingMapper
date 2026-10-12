@@ -43,7 +43,7 @@ test('ring contains only the ten perimeter positions of the 4 x 3 source grid', 
 });
 test('timeline hit testing and note placement use the same ten positions as the ring', () => {
   const project = newProject();
-  const state = { project, beat: 0, start: 0, scale: 48, division: 4, active: 'notes' as const, tool: 'draw', ringRotation: 0, ringReverse: false };
+  const state = { project, beat: 0, start: 0, scale: 48, division: 4, active: 'notes' as const, mode: 'notes' as const, overlaps: [], ringRotation: 0, ringReverse: false };
   assert.equal(bands.notes.lanes, 10);
   handPositions.forEach(([lineIndex, lineLayer], index) => {
     assert.equal(handLane(lineIndex, lineLayer), index);
