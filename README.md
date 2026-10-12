@@ -1,3 +1,10 @@
+由于原编辑器网站（https://cipher-editor-cn.picovr.com/）访问不了，所以净室开发了这个网站。希望能让大家玩的开心。
+
+
+
+
+
+
 # RingMapper
 
 本地谱面编辑器。从项目 `Map/` 中读取歌曲，支持原生 YAML 谱面编辑与 ZIP 导入导出。
