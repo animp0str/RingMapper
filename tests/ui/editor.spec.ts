@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, fixtureFile } from './fixtures';
 import JSZip from 'jszip';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -33,29 +33,25 @@ test('library, editing, undo, multi-selection, group, export and playback', asyn
   await page.screenshot({ path: 'test-results/editor-desktop.png', fullPage: true }); expect(errors).toEqual([]);
 });
 
-test('new project, hold, custom audio, save, backups and stale revision protection', async ({ page, request }) => {
-  const id = `ringmapper-test-${Date.now()}`, root = path.resolve('Map', id), backups = path.resolve('.ringmapper-backups', id);
-  try {
-    await page.goto('/'); await expect(page.locator('#song-name')).toHaveText('曹操'); await unitDepth(page);
-    await page.locator('#new-project').click(); await page.locator('[data-info="songName"]').fill('测试谱面');
-    await page.locator('#audio-input').setInputFiles(path.resolve('Map/caocao/caocao.ogg'));
-    await expect(page.locator('#toast')).toContainText('音频');
-    await page.locator('#apply-settings').click(); await page.locator('[data-mode="notes"]').click(); await page.locator('#hold-add').click(); await selectLastVisibleNote(page, 'ringNotes'); await expect(page.locator('[data-field="ringNoteType"]')).toHaveValue('1');
-    await page.locator('[data-field="lineIndex"]').fill('35'); await page.locator('[data-field="lineIndex"]').dispatchEvent('change');
-    await page.locator('#save').click(); await page.locator('#new-song-id').fill(id); await page.locator('#confirm-save').click();
-    await expect(page.locator('#save-state')).toHaveText('已保存', { timeout: 15000 }); expect((await fs.stat(path.join(root, 'caocao.ogg'))).size).toBeGreaterThan(1000);
-    const original = await (await request.get(`/api/project?song=${id}&chart=Ring/NormalRing.yaml`)).json();
-    await page.locator('[data-field="duration"]').fill('4'); await page.locator('[data-field="duration"]').dispatchEvent('change'); await page.locator('#save').click(); await expect(page.locator('#save-state')).toHaveText('已保存', { timeout: 15000 });
-    expect((await fs.readdir(backups)).length).toBeGreaterThan(0);
-    const conflict = await request.post('/api/save', { data: original }); expect(conflict.status()).toBe(400); expect((await conflict.json()).error).toContain('修改');
-    const chart = parse(await fs.readFile(path.join(root, 'Ring/NormalRing.yaml'), 'utf8')); expect(chart.ringNotes[0].duration).toBe(4);
-    await page.locator('[data-create-mode="Ring"][data-create-difficulty="Hard"]').click(); await page.locator('#difficulty-create').click(); await expect(page.locator('#source-path')).toHaveText('Ring/HardRing.yaml'); await page.locator('#save').click(); await expect(page.locator('#save-state')).toHaveText('已保存', { timeout: 15000 });
-    expect(await fs.stat(path.join(root, 'Ring/HardRing.yaml'))).toBeTruthy(); expect(await fs.stat(path.join(root, 'Ring/NormalRing.yaml'))).toBeTruthy();
-  } finally {
-    // Only the uniquely named test workspace and its matching backup are removed.
-    if (root.startsWith(path.resolve('Map') + path.sep) && path.basename(root).startsWith('ringmapper-test-')) await fs.rm(root, { recursive: true, force: true });
-    if (backups.startsWith(path.resolve('.ringmapper-backups') + path.sep) && path.basename(backups).startsWith('ringmapper-test-')) await fs.rm(backups, { recursive: true, force: true });
-  }
+test('new project, hold, custom audio, save, backups and stale revision protection', async ({ page }) => {
+  const id = `ringmapper-test-${Date.now()}`;
+  await page.goto('/'); await expect(page.locator('#song-name')).toHaveText('曹操'); await unitDepth(page);
+  await page.locator('#new-project').click(); await page.locator('[data-info="songName"]').fill('测试谱面');
+  await page.locator('#audio-input').setInputFiles(path.resolve('Map/caocao/caocao.ogg'));
+  await expect(page.locator('#toast')).toContainText('音频');
+  await page.locator('#apply-settings').click(); await page.locator('[data-mode="notes"]').click(); await page.locator('#hold-add').click(); await selectLastVisibleNote(page, 'ringNotes');
+  await expect(page.locator('[data-field="ringNoteType"]')).toHaveValue('1');
+  await page.locator('#save').click(); await page.locator('#new-song-id').fill(id); await page.locator('#confirm-save').click();
+  await expect(page.locator('#save-state')).toHaveText('已保存', { timeout: 15000 });
+  await page.locator('[data-field="duration"]').fill('4'); await page.locator('[data-field="duration"]').dispatchEvent('change'); await page.locator('#save').click();
+  await expect(page.locator('#save-state')).toHaveText('已保存');
+  expect(parse(await fixtureFile(page, id + '/Ring/NormalRing.yaml')).ringNotes[0].duration).toBe(4);
+  expect(await page.evaluate(async id => { const map = await (await navigator.storage.getDirectory()).getDirectoryHandle('Map'); const backups = await (await map.getDirectoryHandle('.ringmapper-backups')).getDirectoryHandle(id); const entries = []; for await (const entry of (backups as any).values()) entries.push(entry.name); return entries.length; }, id)).toBeGreaterThan(0);
+  await page.locator('[data-create-mode="Ring"][data-create-difficulty="Hard"]').click(); await page.locator('#difficulty-create').click(); await page.locator('#save').click(); await expect(page.locator('#save-state')).toHaveText('已保存');
+  expect(await fixtureFile(page, id + '/Ring/HardRing.yaml')).toContain('notes:');
+  const original = await fixtureFile(page, id + '/Info.yaml'); await fixtureFile(page, id + '/Info.yaml', original + '\nexternalField: changed\n');
+  await page.locator('#add-at-beat').click(); await page.locator('#save').click(); await expect(page.locator('#toast')).toContainText('外部修改');
+  await expect(page.locator('#save-state')).toHaveText('有未保存修改'); expect(await fixtureFile(page, id + '/Info.yaml')).toContain('externalField');
 });
 
 test('ZIP import preserves additional fields and event files', async ({ page }) => {

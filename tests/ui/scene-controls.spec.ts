@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures';
 import { selectLastVisibleNote, frontCamera } from './helpers';
 
 async function fresh(page: Page) {

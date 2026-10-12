@@ -1,5 +1,8 @@
 import './style.css';
 import JSZip from 'jszip';
+import { LocalWorkspace, stored, chooseWorkspace, directorySupported, type WorkspaceRecord, type Draft } from './workspace';
+let workspace: LocalWorkspace | undefined, recentWorkspace: WorkspaceRecord | undefined, workspaceReady = false;
+const libraryUrls = new Map<string, Promise<string>>();
 import { createIcons, AudioLines, Bell, ClipboardPaste, Copy, Download, Eraser, FolderInput, FolderOpen, Image, Keyboard, LocateFixed, MousePointer2, Music2, Orbit, Pause, Pencil, Play, Plus, Redo2, Save, ScanLine, Search, Settings2, SkipBack, SlidersHorizontal, Sparkles, Trash2, Undo2, Volume2, X } from 'lucide';
 const icons = { AudioLines, Bell, ClipboardPaste, Copy, Download, Eraser, FolderInput, FolderOpen, Image, Keyboard, LocateFixed, MousePointer2, Music2, Orbit, Pause, Pencil, Play, Plus, Redo2, Save, ScanLine, Search, Settings2, SkipBack, SlidersHorizontal, Sparkles, Trash2, Undo2, Volume2, X };
 import { History, beatToSeconds, secondsToBeat, snap, newItem, newProject, items, ensureItems, kinds, labels, decodeText, readYaml, writeYaml, sortedProject, validateChart, updateMetadata, type Project, type Song, type Kind, type Item } from './model';
@@ -47,7 +50,7 @@ let localAssets = new Map<string, Blob>(), history = new History(), savedSignatu
 const audio = new Audio(); audio.preload = 'auto';
 const app = $('app');
 app.innerHTML = `
-<div class="workspace"><aside class="library"><div class="brand"><span class="brand-mark">◎</span><div>RingMapper<small>本地创作 · 谱面工作台</small></div></div><div class="section-label">WORKSPACE <button id="workspace-folder" title="在文件管理器中打开当前歌曲目录；未保存时打开 Map" aria-label="打开本地谱面路径">${icon('folder-open')}谱面目录</button></div><div class="library-actions"><button id="new-project">${icon('plus')}新建</button><button id="import">${icon('folder-input')}导入</button></div><div class="search-wrap">${icon('search')}<input id="search" placeholder="搜索歌曲 / 艺术家" aria-label="搜索歌曲"></div><div class="library-caption"><span>全部歌曲</span><span id="song-count">加载中</span></div><div id="song-list" class="song-list"></div><div class="library-bottom"><span class="status-dot"></span>本地工作区<span>Map /</span></div></aside>
+<div class="workspace"><aside class="library"><div class="brand"><span class="brand-mark">◎</span><div>RingMapper<small>本地创作 · 谱面工作台</small></div></div><div class="section-label">WORKSPACE <button id="workspace-folder" title="选择电脑中包含歌曲子目录的 Map 文件夹" aria-label="打开本地文件夹">${icon('folder-open')}打开本地文件夹</button></div><div class="workspace-access"><span id="workspace-name">尚未选择目录</span><button id="workspace-authorize" hidden>重新授权</button><button id="workspace-refresh" title="刷新本地曲库">刷新</button></div><div class="library-actions"><button id="new-project">${icon('plus')}新建</button><button id="import">${icon('folder-input')}导入</button></div><div class="search-wrap">${icon('search')}<input id="search" placeholder="搜索歌曲 / 艺术家" aria-label="搜索歌曲"></div><div class="library-caption"><span>全部歌曲</span><span id="song-count">加载中</span></div><div id="song-list" class="song-list"></div><div class="library-bottom"><span class="status-dot"></span>本地工作区<span>文件留在电脑</span></div></aside>
 <main id="scene-workspace"><section class="preview-panel" aria-label="3D 工作区">
 <div class="preview-viewport"><canvas id="preview" tabindex="0" aria-label="3D 圆环手部与下方脚部音符预览"></canvas></div>
 <button id="overlap-status" class="overlap-status" hidden aria-live="polite"></button><div class="scene-top"><div class="scene-song"><div class="song-details"><section class="songbar"><div class="song-cover" id="current-cover">◎</div><div class="song-info"><h1 id="song-name">未命名歌曲</h1><p id="artist-name">开始创作你的节奏</p></div><div class="song-meta"><span>BPM<strong id="bpm-display">120</strong></span><span>音符<strong id="note-count">0</strong></span></div><button id="settings" title="歌曲设置">${icon('settings-2')}</button></section>
@@ -61,8 +64,41 @@ app.innerHTML = `
 <div id="toast" role="status"></div><dialog id="modal"><div id="modal-content"></div></dialog><input id="import-input" type="file" accept=".zip,.yaml,.yml" multiple hidden><input id="audio-input" type="file" accept="audio/ogg,audio/mpeg,audio/wav" hidden><input id="cover-input" type="file" accept="image/png,image/jpeg,image/webp" hidden></section></main></div>`;
 function iconsRefresh() { createIcons({ icons }); }
 function notify(message: string) { $('toast').textContent = message; $('toast').classList.add('show'); setTimeout(() => $('toast').classList.remove('show'), 4500); }
-async function api<T>(url: string, options?: RequestInit): Promise<T> { const r = await fetch(url, options); const data = await r.json(); if (!r.ok) throw new Error(data.error || r.statusText); return data; }
-function asset(song: string, file: string) { return `/api/asset?song=${encodeURIComponent(song)}&file=${encodeURIComponent(file)}`; }
+function resetLibraryUrls() { for (const url of libraryUrls.values()) void url.then(u => { if (u) URL.revokeObjectURL(u); }); libraryUrls.clear(); }
+async function asset(song: string, file: string) {
+  const ws = workspace; if (!ws || !workspaceReady) return '';
+  const key = `${ws.id}/${song}/${file}`;
+  if (!libraryUrls.has(key)) libraryUrls.set(key, ws.asset(song, file).then(blob => blob ? URL.createObjectURL(blob) : '').catch(() => ''));
+  return libraryUrls.get(key)!;
+}
+function workspaceStatus() {
+  $('workspace-name').textContent = recentWorkspace ? recentWorkspace.handle.name : '尚未选择目录';
+  $('workspace-authorize').hidden = !recentWorkspace || workspaceReady;
+  $('workspace-folder').title = workspaceReady ? '重新选择本地 Map 文件夹' : '选择电脑中包含歌曲子目录的 Map 文件夹';
+  $<HTMLButtonElement>('workspace-refresh').disabled = !workspaceReady;
+}
+async function refreshWorkspace() {
+  if (!workspace || !workspaceReady) return;
+  try { const ws = workspace, list = await ws.catalog(); if (ws !== workspace) return; songs = list; resetLibraryUrls(); renderLibrary(); notify('本地曲库已刷新；当前编辑内容保留'); }
+  catch (e: any) { notify('目录访问失败：' + e.message); }
+}
+async function authorizeWorkspace() {
+  if (!recentWorkspace) return;
+  try {
+    const ws = new LocalWorkspace(recentWorkspace);
+    if (!await ws.permitted('read', true)) { notify('未获得读取权限，仍可新建或导入 ZIP'); return; }
+    workspace = ws; workspaceReady = true; songs = await ws.catalog(); workspaceStatus(); renderLibrary();
+    if (project.workspaceId === ws.id && project.songId) { activeSong = songs.find(s => s.id === project.songId); await loadProjectMedia(); renderSummary(); }
+    else if (!dirty && !project.songId && songs.length) await openSong(songs[0]);
+  } catch (e: any) { notify('目录访问失败：' + e.message); }
+}
+async function loadProjectMedia() {
+  const ws = workspace, p = project;
+  const media = async (name: string) => localAssets.get(name) ?? (ws && workspaceReady && p.workspaceId === ws.id && p.songId && name ? await ws.asset(p.songId, name) : undefined);
+  const [sound, cover] = await Promise.all([media(p.info.songFilename), media(p.info.coverImageFilename)]);
+  if (project !== p) return;
+  setCover(cover || undefined); void loadAudio(sound ? URL.createObjectURL(sound) : '');
+}
 function view(): ViewState { return { project, beat, start, scale, division, selected: selected[0], selections: selected, active, mode, overlaps, ringRotation, ringReverse }; }
 const preview = $<HTMLCanvasElement>('preview'), timeline = $<HTMLCanvasElement>('timeline');
 let spatialPreview: SpatialPreview | undefined;
@@ -74,9 +110,9 @@ function totalBeats() { return Math.max(16, secondsToBeat(Number(project.info.so
 function changed() {
   if (!applyingFill) closeFill();
   diagnosticsDirty = true;
-  dirty = JSON.stringify(project) !== savedSignature;
+  dirty = JSON.stringify(project) !== savedSignature || localAssets.size > 0;
   $('save-state').textContent = dirty ? '有未保存修改' : '已保存'; $('save-state').classList.toggle('unsaved', dirty);
-  clearTimeout(draftTimer); draftTimer = setTimeout(() => { try { localStorage.setItem('ringmapper-draft', JSON.stringify({ project, date: Date.now() })); } catch { notify('浏览器草稿空间不足，请保存到本地'); } }, 600);
+  clearTimeout(draftTimer); draftTimer = setTimeout(() => { try { void stored<Draft>('draft', { project: structuredClone(project), assets: new Map(localAssets), date: Date.now() }).catch(() => notify('浏览器草稿空间不足，请保存或导出 ZIP')); } catch { notify('浏览器草稿空间不足，请保存到本地'); } }, 600);
   renderSummary(); draw();
 }
 function mutate(fn: () => void) { history.push(project); fn(); changed(); renderInspector(); }
@@ -100,7 +136,8 @@ function renderLibrary() {
   const query = $<HTMLInputElement>('search').value.toLocaleLowerCase();
   const visible = songs.filter(s => `${s.name} ${s.artist} ${s.id}`.toLowerCase().includes(query));
   $('song-count').textContent = `${visible.length} 首`;
-  $('song-list').innerHTML = visible.map(s => `<button class="song-card ${s.id === activeSong?.id ? 'active' : ''}" data-song="${escape(s.id)}"><div class="thumb">${s.cover ? `<img draggable="false" loading="lazy" src="${asset(s.id, s.cover)}" alt="">` : '◎'}</div><div class="song-card-info"><strong>${escape(s.name)}</strong><span>${escape(s.artist)}</span><small>${s.bpm} BPM <i>·</i> ${s.charts.length} 张谱面</small></div>${s.id === activeSong?.id ? '<span class="song-active-dot"></span>' : ''}</button>`).join('') || '<div class="empty-library">没有找到歌曲</div>';
+  $('song-list').innerHTML = visible.map(s => `<button class="song-card ${s.id === activeSong?.id ? 'active' : ''}" data-song="${escape(s.id)}"><div class="thumb">${s.cover ? `<img draggable="false" loading="lazy" data-local-cover="${escape(s.id)}" alt="">` : '◎'}</div><div class="song-card-info"><strong>${escape(s.name)}</strong><span>${escape(s.artist)}</span><small>${s.bpm} BPM <i>·</i> ${s.charts.length} 张谱面</small></div>${s.id === activeSong?.id ? '<span class="song-active-dot"></span>' : ''}</button>`).join('') || `<div class="empty-library">${workspaceReady ? '没有找到歌曲；可新建或导入 ZIP' : '打开本地 Map 文件夹开始编辑<br>也可新建歌曲或导入 ZIP<br><small>歌曲与谱面只在你的电脑中处理</small>'}</div>`;
+  for (const img of document.querySelectorAll<HTMLImageElement>('[data-local-cover]')) { const song = songs.find(s => s.id === img.dataset.localCover)!; void asset(song.id, song.cover).then(url => { if (img.isConnected && url) img.src = url; }); }
 }
 const fields: Record<Kind, string[]> = { notes: ['time', 'lineIndex', 'lineLayer', 'type', 'cutDirection', 'groupId', 'groupNoteType', 'specialType'], ringNotes: ['time', 'lineIndex', 'type', 'ringNoteType', 'duration'], obstacles: ['time', 'lineIndex', 'type', 'style'], events: ['time', 'type', 'value'] };
 const fieldNames: Record<string, string> = { time: '节拍', lineIndex: '位置编号', lineLayer: '层级', type: '类型 / 颜色', cutDirection: '击打方向', ringNoteType: '脚部音符类型', duration: '持续拍数', width: '宽度', value: '事件值', groupId: '分组 ID', groupNoteType: '分组标记', specialType: '特殊类型', style: '样式' };
@@ -201,12 +238,13 @@ async function openSong(song: Song, chartPath?: string) {
   try {
     const entry = chartPath ? song.charts.find(c => c.path === chartPath) : song.charts.find(c => c.difficulty === 'Normal') ?? song.charts[0];
     if (!entry) { notify('此歌曲没有谱面文件，可新建谱面并导入该歌曲音频'); return; }
-    const p = await api<Project>(`/api/project?song=${encodeURIComponent(song.id)}&chart=${encodeURIComponent(entry.path)}`);
+    if (!workspace || !workspaceReady) throw new Error('请先打开本地文件夹');
+    const p = await workspace.open(song, entry);
     if (loadId !== loadingProject) return;
     activeSong = song; localAssets.clear(); project = p; history.clear(); selected = []; beat = 0; start = 0; dirty = false; savedSignature = JSON.stringify(project);
-    $('current-cover').innerHTML = song.cover ? `<img draggable="false" src="${asset(song.id, song.cover)}" alt="歌曲封面">` : '◎';
+    clearTimeout(draftTimer); void stored('draft', null).catch(() => {}); localStorage.removeItem('ringmapper-draft'); setCover();
     $('save-state').textContent = '已保存'; $('save-state').classList.remove('unsaved'); renderSummary(); renderLibrary(); renderInspector(); updateTransport(); draw();
-    void loadAudio(song.audio ? asset(song.id, song.audio) : '');
+    await loadProjectMedia();
     if (song.warnings.length) notify(`已按实际文件加载；发现 ${song.warnings.length} 个旧元数据路径引用`);
   } catch (e: any) { notify(e.message); }
 }
@@ -317,36 +355,39 @@ function mappingDialog() {
   };
 }
 async function saveProject(songId = project.songId) {
+  if (!workspace || !workspaceReady) { modal('保存本地谱面', '<p>先打开并授权本地 Map 文件夹即可直接保存。也可导出 ZIP，在电脑上解压使用。</p><div class="modal-actions"><button id="save-pick-folder">打开本地文件夹</button><button id="save-export" class="primary">导出 ZIP</button></div>'); $('save-pick-folder').onclick = () => { $<HTMLDialogElement>('modal').close(); void openWorkspaceFolder(true); }; $('save-export').onclick = () => { $<HTMLDialogElement>('modal').close(); void exportProject(); }; return; }
+  if (project.workspaceId && project.workspaceId !== workspace.id) { notify('此草稿属于另一个工作区，请重新打开原目录，或导出 ZIP 后重新导入'); return; }
   if (saving) return;
-  if (!songId) { modal('保存到本地曲库', '<p>输入新歌曲目录名，谱面将写入项目的 Map 目录。音频、封面及其他难度会一同保存。</p><label class="full-field">目录名<input id="new-song-id" value="my-song"></label><div class="modal-actions"><button id="confirm-save" class="primary">保存</button></div>'); $('confirm-save').onclick = () => { const id = $<HTMLInputElement>('new-song-id').value.trim(); $<HTMLDialogElement>('modal').close(); void saveProject(id); }; return; }
+  if (!songId) { modal('保存到本地曲库', '<p>输入新歌曲目录名，谱面将写入你选择的 Map 目录。音频、封面及其他难度会一同保存。</p><label class="full-field">目录名<input id="new-song-id" value="my-song"></label><div class="modal-actions"><button id="confirm-save" class="primary">保存</button></div>'); $('confirm-save').onclick = () => { const id = $<HTMLInputElement>('new-song-id').value.trim(); $<HTMLDialogElement>('modal').close(); void saveProject(id); }; return; }
   try {
     saving = true; $<HTMLButtonElement>('save').disabled = true;
-    const original = structuredClone(project); const p = sortedProject(project); p.songId = songId;
-    const assets: Record<string, string> = {};
-    for (const [name, blob] of localAssets) assets[name] = await blobBase64(blob);
-    const result = await api<{ revision: string; backup: string; info: any }>('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...p, assets }) });
-    const sameContext = project.songId === original.songId && project.chartPath === original.chartPath;
+    const editingProject = project, original = structuredClone(project); const p = sortedProject(project); p.songId = songId;
+    const ws = workspace, assetsSnapshot = new Map(localAssets); const result = await ws.save(p, assetsSnapshot);
+    const sameContext = project === editingProject && workspace === ws && project.songId === original.songId && project.chartPath === original.chartPath;
     if (sameContext) {
-      const unchanged = JSON.stringify(project) === JSON.stringify(original);
-      project.songId = songId; project.revision = result.revision;
+      const unchanged = JSON.stringify(project) === JSON.stringify(original) && localAssets.size === assetsSnapshot.size && [...localAssets].every(([name, blob]) => assetsSnapshot.get(name) === blob);
+      project.songId = songId; project.workspaceId = ws.id; project.revision = result.revision;
       if (unchanged) project.info = result.info; else updateMetadata(project);
-      original.songId = songId; original.revision = result.revision; original.info = result.info; savedSignature = JSON.stringify(original);
+      original.songId = songId; original.workspaceId = ws.id; original.revision = result.revision; original.info = result.info; savedSignature = JSON.stringify(original);
       if (unchanged) localAssets.clear(); changed();
     }
-    songs = await api<Song[]>('/api/catalog'); if (sameContext) activeSong = songs.find(s => s.id === songId); renderLibrary(); renderSummary(); notify(result.backup ? '谱面已保存，原文件已自动备份' : '谱面已保存到 Map/' + songId);
+    songs = await ws.catalog(); resetLibraryUrls(); if (sameContext) activeSong = songs.find(s => s.id === songId); renderLibrary(); renderSummary(); notify(result.backup ? '谱面已保存，原文件已自动备份' : '谱面已保存到 Map/' + songId);
   } catch (e: any) { notify('保存失败：' + e.message); }
   finally { saving = false; $<HTMLButtonElement>('save').disabled = false; }
 }
 function download(blob: Blob, name: string) { const url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 10000); }
-async function exportProject() {
+async function exportProject(partial = false) {
   try {
     const p = sortedProject(project), errors = validateChart(p.chart, p.event); if (errors.length) throw new Error(errors[0]); updateMetadata(p);
-    let zip: JSZip;
-    if (project.songId) { const r = await fetch('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }); if (!r.ok) throw new Error((await r.json()).error); zip = await JSZip.loadAsync(await r.arrayBuffer()); }
-    else { zip = new JSZip(); zip.file('Info.yaml', writeYaml(p.info)); zip.file(p.chartPath, writeYaml(p.chart)); zip.file(p.eventPath, writeYaml(p.event)); }
+    const attached = project.songId && workspaceReady && workspace && project.workspaceId === workspace.id;
+    if (project.songId && !attached && !partial) {
+      modal('原曲库尚未授权', '<p>当前只能导出已恢复的谱面和草稿资源，未授权目录中的音频、封面及其他难度不会包含在内。打开原目录可导出完整曲包。</p><div class="modal-actions"><button id="partial-export">仅导出恢复内容</button><button id="cancel-modal">返回编辑</button></div>');
+      $('partial-export').onclick = () => { $<HTMLDialogElement>('modal').close(); void exportProject(true); }; return;
+    }
+    const zip = attached ? await workspace!.export(p, localAssets) : new JSZip();
     for (const [name, blob] of localAssets) zip.file(name, blob);
     zip.file('Info.yaml', writeYaml(p.info)); zip.file(p.chartPath, writeYaml(p.chart)); zip.file(p.eventPath, writeYaml(p.event));
-    download(await zip.generateAsync({ type: 'blob' }), `${p.info.songName || 'RingMapper'}.zip`); notify('ZIP 已导出，包含音频、封面及已有难度');
+    download(await zip.generateAsync({ type: 'blob' }), `${p.info.songName || 'RingMapper'}.zip`); notify(partial ? '已导出恢复内容；未授权目录中的资源未包含' : 'ZIP 已导出，包含已加载的谱面与资源');
   } catch (e: any) { notify('导出失败：' + e.message); }
 }
 function settings() {
@@ -377,8 +418,21 @@ function rangeDialog() {
   $('range-apply').onclick = () => { if (!apply()) return; $<HTMLDialogElement>('modal').close(); select(selected); };
   $('range-delete').onclick = () => { if (!apply()) return; $<HTMLDialogElement>('modal').close(); removeSelected(); };
 }
-async function openWorkspaceFolder() {
-  try { await api('/api/open-folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ song: project.songId || '' }) }); notify('已在文件管理器中打开谱面目录'); } catch (e: any) { notify('打开目录失败：' + e.message); }
+async function openWorkspaceFolder(preserve = false) {
+  if (saving) { notify('请等待保存完成后切换目录'); return; }
+  if (!directorySupported()) { notify('此浏览器不支持直接读写文件夹，请使用桌面 Chrome / Edge，或导入和导出 ZIP'); return; }
+  try {
+    const keepEditor = dirty && (!project.songId || preserve);
+    const next = await chooseWorkspace(recentWorkspace), ws = new LocalWorkspace(next);
+    const list = await ws.catalog();
+    workspace = ws; recentWorkspace = next; workspaceReady = true; songs = list; activeSong = undefined;
+    ++loadingProject; resetLibraryUrls();
+    try { await stored('workspace', next); } catch { notify('目录已打开，但浏览器无法记住授权；下次请重新选择'); }
+    workspaceStatus(); renderLibrary();
+    if (project.workspaceId === ws.id && project.songId) { activeSong = songs.find(s => s.id === project.songId); await loadProjectMedia(); renderSummary(); }
+    else if (!keepEditor && songs.length) await openSong(songs.find(s => s.id === 'caocao') ?? songs[0]);
+    else if (!keepEditor) { project = newProject(); localAssets.clear(); selected = []; history.clear(); savedSignature = JSON.stringify(project); dirty = false; void loadAudio(''); setCover(); renderSummary(); renderInspector(); draw(); }
+  } catch (e: any) { if (e.name !== 'AbortError') notify('打开目录失败：' + e.message); }
 }
 function addDifficulty(initialMode = 'Ring', initialDifficulty = 'Hard') {
   modal('添加难度', `<div class="field-grid"><label>模式<select id="new-mode"><option>Ring</option><option>RingDance</option></select></label><label>难度<select id="new-difficulty"><option>Easy</option><option>Normal</option><option selected>Hard</option><option>Expert</option><option>ExpertPlus</option></select></label></div><label class="checkbox"><input id="clone-chart" type="checkbox">复制当前音符与障碍物</label><label class="checkbox"><input id="clone-events" type="checkbox" checked>复制当前灯光事件</label><div class="modal-actions"><button id="difficulty-create" class="primary">创建难度</button></div>`);
@@ -394,8 +448,7 @@ function addDifficulty(initialMode = 'Ring', initialDifficulty = 'Hard') {
       if (!clone) project.chart = { version: '2.3.0', notes: [], ringNotes: [], obstacles: [], customData: { bookmarks: [] } };
       if (!cloneEvents) project.event = { version: '2.3.0', events: [] }; selected = []; updateMetadata(project);
     });
-    // New targets require a fresh revision including missing files, obtained without changing source files.
-    if (project.songId) { try { project.revision = (await api<{ revision: string }>(`/api/revision?song=${encodeURIComponent(project.songId)}&chart=${encodeURIComponent(project.chartPath)}&event=${encodeURIComponent(project.eventPath)}`)).revision; } catch (e: any) { notify(e.message); } }
+    // Keep the original workspace snapshot: newly appeared files must conflict at save time.
     $<HTMLDialogElement>('modal').close(); renderSummary(); notify('已创建新难度，保存后写入歌曲目录');
   };
 }
@@ -409,9 +462,13 @@ async function importFiles(files: File[]) {
       const prefix = infoName.slice(0, -'Info.yaml'.length); let bytes = 0;
       for (const name of names.filter(n => n.startsWith(prefix))) { const relative = name.slice(prefix.length); if (!relative || relative.includes('..') || relative.startsWith('/') || relative.includes(':')) continue; const blob = await zip.files[name].async('blob'); bytes += blob.size; if (bytes > 200_000_000) throw new Error('解压内容超过 200MB'); assets.set(relative, blob); }
       p.info = readYaml(await blobText(assets.get('Info.yaml')!));
-      const charts = [...assets.keys()].filter(n => /\.yaml$/i.test(n) && n !== 'Info.yaml' && !/Event\.yaml$/i.test(n));
+      const entries = [...(p.info.difficultyCiphermapSets ?? []), ...(p.info.difficultyBeatmapSets ?? [])].flatMap((set: any) => set.difficultyCiphermaps ?? set.difficultyBeatmaps ?? []);
+      const events = new Set(entries.map((entry: any) => String(entry.eventmapFilename ?? '').replaceAll('\\', '/')));
+      const charts = [...assets.keys()].filter(n => /\.yaml$/i.test(n) && n !== 'Info.yaml' && !events.has(n) && !/Event\.yaml$/i.test(n));
       if (!charts.length) throw new Error('ZIP 中没有谱面文件');
-      p.chartPath = charts.find(n => /Normal/.test(n)) ?? charts[0]; p.eventPath = p.chartPath.replace('.yaml', 'Event.yaml');
+      p.chartPath = charts.find(n => /Normal/.test(n)) ?? charts[0];
+      const entry = entries.find((entry: any) => String(entry.ciphermapFilename ?? entry.beatmapFilename ?? '').replaceAll('\\', '/') === p.chartPath);
+      p.eventPath = String(entry?.eventmapFilename ?? p.chartPath.replace('.yaml', 'Event.yaml')).replaceAll('\\', '/');
       p.chart = readYaml(await blobText(assets.get(p.chartPath)!)); p.event = assets.has(p.eventPath) ? readYaml(await blobText(assets.get(p.eventPath)!)) : { version: p.chart.version, events: [] };
     } else {
       const chartFile = files.find(f => !/Event\.ya?ml$/i.test(f.name) && f.name !== 'Info.yaml'); if (!chartFile) throw new Error('请选择音符 YAML，可同时选择 Info.yaml 与 Event.yaml');
@@ -421,7 +478,7 @@ async function importFiles(files: File[]) {
     }
     const errors = validateChart(p.chart, p.event); if (errors.length) throw new Error(errors.slice(0, 3).join('；'));
     if (!(Number(p.info.beatsPerMinute) > 0)) throw new Error('Info.yaml 的 BPM 必须大于 0');
-    project = p; activeSong = undefined; localAssets = assets; selected = []; history.clear(); beat = start = 0; savedSignature = ''; changed(); renderLibrary(); renderInspector();
+    ++loadingProject; project = p; activeSong = undefined; localAssets = assets; selected = []; history.clear(); beat = start = 0; savedSignature = ''; changed(); renderLibrary(); renderInspector();
     const audioBlob = assets.get(p.info.songFilename); void loadAudio(audioBlob ? URL.createObjectURL(audioBlob) : '');
     const cover = assets.get(p.info.coverImageFilename); setCover(cover); notify('谱面导入成功，全部难度与原始字段已保留');
   } catch (e: any) { notify('导入失败：' + e.message); }
@@ -437,9 +494,10 @@ const actions: Record<string, () => void> = {
   save: () => void saveProject(), export: () => void exportProject(), settings, check: checkChart, 'range-select': rangeDialog,
   group: () => groupNotes(), 'join-group': () => groupNotes('join'), 'light-focus': () => spatialPreview?.focusLighting(), 'light-mapping': mappingDialog, 'speed-reset': () => setPlaybackRate(1), copy, paste, 'mirror-left-right': () => mirror('left-right'), 'mirror-up-down': () => mirror('up-down'), 'mirror-diagonal': () => mirror('diagonal'), delete: removeSelected, undo: () => undo(), redo: () => undo(true),
   play: () => void togglePlay(), home: () => { stop(); setBeat(0); start = 0; draw(); }, follow: () => { start = Math.max(0, beat - 2); draw(); },
-  'new-project': () => confirmDiscard(() => { project = newProject(); activeSong = undefined; localAssets.clear(); history.clear(); selected = []; beat = start = 0; savedSignature = ''; void loadAudio(''); setCover(); changed(); renderLibrary(); renderInspector(); settings(); }),
+  'new-project': () => confirmDiscard(() => { ++loadingProject; project = newProject(); activeSong = undefined; localAssets.clear(); history.clear(); selected = []; beat = start = 0; savedSignature = ''; void loadAudio(''); setCover(); changed(); renderLibrary(); renderInspector(); settings(); }),
   import: () => confirmDiscard(() => $<HTMLInputElement>('import-input').click()),
-  'workspace-folder': () => void openWorkspaceFolder(),
+  'workspace-folder': () => { if (project.songId && dirty) confirmDiscard(() => void openWorkspaceFolder()); else void openWorkspaceFolder(); },
+  'workspace-refresh': () => void refreshWorkspace(), 'workspace-authorize': () => void authorizeWorkspace(),
   'add-at-beat': () => add(mode === 'notes' ? 'notes' : mode, mode === 'events' ? eventType : 0), 'add-foot': () => add('ringNotes'), 'hold-add': () => add('ringNotes', 0, 0, snap(beat, division), true),
   metronome: () => { metronome = !metronome; $('metronome').classList.toggle('active', metronome); $('metronome').setAttribute('aria-pressed', String(metronome)); if (metronome) clickBeat(); },
   'view-settings': () => {
@@ -480,7 +538,7 @@ app.addEventListener('click', e => {
   if (el.dataset.createMode && el.dataset.createDifficulty) { addDifficulty(el.dataset.createMode, el.dataset.createDifficulty); return; }
   if (actions[el.id]) { actions[el.id](); return; }
   if (el.dataset.song) { const s = songs.find(s => s.id === el.dataset.song)!; confirmDiscard(() => void openSong(s)); }
-  if (el.dataset.chart && el.dataset.chart !== project.chartPath) { if (localAssets.has(el.dataset.chart)) void openLocalChart(el.dataset.chart); else if (activeSong) confirmDiscard(() => void openSong(activeSong!, el.dataset.chart)); }
+  if (el.dataset.chart && el.dataset.chart !== project.chartPath) void openLocalChart(el.dataset.chart);
   if (el.dataset.mode) setMode(el.dataset.mode as typeof mode);
   if (el.dataset.overlap !== undefined) { const o = overlaps[Number(el.dataset.overlap)]; if (o) { $<HTMLDialogElement>('modal').close(); setBeat(o.time); select(o.indices.map(index => ({ kind: o.kind, index }))); } }
   if (el.dataset.color) { noteType = Number(el.dataset.color); renderInspector(); }
@@ -787,27 +845,34 @@ window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); 
 new ResizeObserver(() => { draw(); updateTransport(); }).observe($('timeline-panel') ?? timeline.parentElement!);
 new ResizeObserver(draw).observe(preview);
 async function init() {
-  iconsRefresh(); renderSummary(); renderInspector(); draw(); requestAnimationFrame(frame);
-  try { songs = await api<Song[]>('/api/catalog'); renderLibrary();
-    const draft = localStorage.getItem('ringmapper-draft');
-    if (draft) {
-      const data = JSON.parse(draft);
-      modal('恢复上次工作', `<p>发现「${escape(data.project.info.songName)}」的浏览器草稿。是否继续编辑？</p><p class="field-help">草稿保存谱面数据；未保存的本地音频和封面需要重新导入。</p><div class="modal-actions"><button id="restore-draft" class="primary">恢复草稿</button><button id="skip-draft">打开曲库</button></div>`);
-      $('restore-draft').onclick = () => { project = data.project; activeSong = songs.find(s => s.id === project.songId); savedSignature = ''; selected = []; changed(); renderLibrary(); renderInspector(); if (activeSong?.audio) void loadAudio(asset(activeSong.id, activeSong.audio)); $<HTMLDialogElement>('modal').close(); };
-      $('skip-draft').onclick = () => { localStorage.removeItem('ringmapper-draft'); $<HTMLDialogElement>('modal').close(); void openSong(songs.find(s => s.id === 'caocao') ?? songs[0]); };
-    } else if (songs.length) await openSong(songs.find(s => s.id === 'caocao') ?? songs[0]);
-  } catch (e: any) { $('song-list').innerHTML = '<div class="empty-library">本地曲库暂不可用<br>仍可新建或导入 ZIP 编辑</div>'; notify(e.message); }
+  iconsRefresh(); savedSignature = JSON.stringify(project); renderSummary(); renderInspector(); renderLibrary(); draw(); requestAnimationFrame(frame);
+  try {
+    recentWorkspace = await stored<WorkspaceRecord>('workspace');
+    if (recentWorkspace) {
+      workspace = new LocalWorkspace(recentWorkspace); workspaceReady = await workspace.permitted('read');
+      if (workspaceReady) songs = await workspace.catalog();
+    }
+  } catch (e: any) { workspaceReady = false; notify('本地工作区暂不可用：' + e.message); }
+  workspaceStatus(); renderLibrary();
+  let draft: Draft | undefined;
+  try { draft = await stored<Draft>('draft'); if (!draft) { const legacy = localStorage.getItem('ringmapper-draft'); if (legacy) draft = { ...JSON.parse(legacy), assets: new Map() }; } } catch { notify('无法恢复浏览器草稿，仍可打开文件或导入 ZIP'); }
+  if (draft?.project) {
+    const data = draft;
+    modal('恢复上次工作', `<p>发现《${escape(data.project.info.songName)}》的浏览器草稿。是否继续编辑？</p><p class="field-help">草稿绑定原工作区；写回之前需要授权对应目录。未授权时仍可编辑和导出恢复内容。</p><div class="modal-actions"><button id="restore-draft" class="primary">恢复草稿</button><button id="skip-draft">打开曲库</button></div>`);
+    $('restore-draft').onclick = () => { project = data.project; localAssets = data.assets instanceof Map ? data.assets : new Map(); activeSong = workspaceReady && project.workspaceId === workspace?.id ? songs.find(s => s.id === project.songId) : undefined; savedSignature = ''; selected = []; changed(); renderLibrary(); renderInspector(); void loadProjectMedia().catch(e => notify('资源恢复失败：' + e.message)); $<HTMLDialogElement>('modal').close(); };
+    $('skip-draft').onclick = () => { localStorage.removeItem('ringmapper-draft'); void stored('draft', null); $<HTMLDialogElement>('modal').close(); if (songs.length) void openSong(songs.find(s => s.id === 'caocao') ?? songs[0]); };
+  } else if (songs.length) await openSong(songs.find(s => s.id === 'caocao') ?? songs[0]);
 }
 void init();
-
-async function blobBase64(blob: Blob): Promise<string> { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = () => reject(reader.error); reader.readAsDataURL(blob); }); }
 
 async function blobText(blob: Blob) { return decodeText(new Uint8Array(await blob.arrayBuffer())); }
 
 function chartEntries() {
   const entries = new Map((activeSong?.charts ?? []).map(c => [c.path, c]));
+  const refs = [...(project.info.difficultyCiphermapSets ?? []), ...(project.info.difficultyBeatmapSets ?? [])].flatMap((set: any) => set.difficultyCiphermaps ?? set.difficultyBeatmaps ?? []);
+  const events = new Set(refs.map((entry: any) => String(entry.eventmapFilename ?? '').replaceAll('\\', '/')));
   for (const filename of [...localAssets.keys(), project.chartPath]) {
-    if (!/\.yaml$/i.test(filename) || filename === 'Info.yaml' || /Event\.yaml$/i.test(filename)) continue;
+    if (!/\.yaml$/i.test(filename) || filename === 'Info.yaml' || events.has(filename) || /Event\.yaml$/i.test(filename)) continue;
     entries.set(filename, { path: filename, eventPath: filename.replace(/\.yaml$/, 'Event.yaml'), mode: filename.split('/')[0], difficulty: filename.split('/').pop()!.replace(/RingDance|Ring|\.yaml/g, '') });
   }
   return [...entries.values()];
@@ -815,12 +880,13 @@ function chartEntries() {
 async function openLocalChart(filename: string) {
   try {
     updateMetadata(project); localAssets.set(project.chartPath, new Blob([writeYaml(project.chart)])); localAssets.set(project.eventPath, new Blob([writeYaml(project.event)]));
-    const chart = readYaml(await blobText(localAssets.get(filename)!));
+    const read = async (name: string) => localAssets.get(name) ?? (workspaceReady && workspace && project.workspaceId === workspace.id && project.songId ? await workspace.asset(project.songId, name) : undefined);
+    const chartBlob = await read(filename); if (!chartBlob) throw new Error('找不到此难度文件，请重新授权原目录');
+    const chart = readYaml(await blobText(chartBlob));
     const entry = [...(project.info.difficultyCiphermapSets ?? []), ...(project.info.difficultyBeatmapSets ?? [])].flatMap((s: any) => s.difficultyCiphermaps ?? s.difficultyBeatmaps ?? []).find((e: any) => (e.ciphermapFilename ?? e.beatmapFilename) === filename);
-    const eventPath = entry?.eventmapFilename ?? filename.replace(/\.yaml$/, 'Event.yaml');
-    const event = localAssets.has(eventPath) ? readYaml(await blobText(localAssets.get(eventPath)!)) : { version: chart.version, events: [] };
+    const eventPath = String(entry?.eventmapFilename ?? filename.replace(/\.yaml$/, 'Event.yaml')).replaceAll('\\', '/');
+    const eventBlob = await read(eventPath); const event = eventBlob ? readYaml(await blobText(eventBlob)) : { version: chart.version, events: [] };
     stop(); project.chart = chart; project.event = event; project.chartPath = filename; project.eventPath = eventPath; selected = []; history.clear();
-    if (project.songId) project.revision = (await api<{ revision: string }>(`/api/revision?song=${encodeURIComponent(project.songId)}&chart=${encodeURIComponent(filename)}&event=${encodeURIComponent(eventPath)}`)).revision;
     changed(); renderInspector();
   } catch (e: any) { notify('切换难度失败：' + e.message); }
 }

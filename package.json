@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "node --import tsx --test tests/*.test.ts",
-    "test:ui": "playwright test"
+    "test:ui": "playwright test",
+    "test:static": "npm run build && playwright test -c playwright.static.config.ts"
   },
   "dependencies": {
     "jszip": "^3.10.1",

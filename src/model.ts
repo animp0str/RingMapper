@@ -3,7 +3,7 @@ import { parse, stringify } from 'yaml';
 export type Item = { time: number; [key: string]: any };
 export type Kind = 'ringNotes' | 'notes' | 'obstacles' | 'events';
 export type Chart = { version?: string; notes?: Item[]; ringNotes?: Item[]; obstacles?: Item[]; [key: string]: any };
-export type Project = { info: Record<string, any>; chart: Chart; event: Record<string, any>; chartPath: string; eventPath: string; songId: string; revision?: string };
+export type Project = { info: Record<string, any>; chart: Chart; event: Record<string, any>; chartPath: string; eventPath: string; songId: string; workspaceId?: string; revision?: string };
 export type ChartEntry = { path: string; eventPath: string; mode: string; difficulty: string };
 export type Song = { id: string; name: string; artist: string; bpm: number; duration: number; cover: string; audio: string; charts: ChartEntry[]; warnings: string[] };
 export const kinds: Kind[] = ['ringNotes', 'notes', 'obstacles', 'events'];
