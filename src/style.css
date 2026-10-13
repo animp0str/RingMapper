@@ -507,3 +507,6 @@ dialog.tutorial-dialog { width: min(960px, calc(100vw - var(--sidebar) - 40px));
 .workspace-access button { padding:5px 7px; font-size:11px; }
 .section-label #workspace-folder { font-size:10px; gap:4px; }
 .workspace-access [hidden] { display: none; }
+
+#tutorial.tutorial-unseen { color: #ffb45e; border-color: #e58a32; background: #7a3c153d; }
+#tutorial.tutorial-unseen:hover { background: #a6522466; }

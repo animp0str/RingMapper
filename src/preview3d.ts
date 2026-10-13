@@ -232,7 +232,7 @@ export class SpatialPreview {
   }
   setDepthScale(value: number) {
     if (!Number.isFinite(value)) return;
-    this.depthScale = THREE.MathUtils.clamp(value, .25, 10);
+    this.depthScale = Math.max(.000001, value);
     if (this.state) this.update(this.state);
   }
   private updateBeatLabels(beats: number[]) {
@@ -338,7 +338,7 @@ export class SpatialPreview {
     }
     for (const overlap of state.overlaps) {
       const note = items(state.project, overlap.kind)[overlap.indices[0]], dt = note.time - state.beat;
-      if (dt > this.lookAhead || dt + Number(note.duration ?? 0) < -.2) continue;
+      if (dt > this.lookAhead || dt + (overlap.kind === 'notes' || (overlap.kind === 'ringNotes' && note.ringNoteType !== 1) ? 0 : Number(note.duration ?? 0)) < 0) continue;
       const center = this.itemCenter(overlap.kind, note);
       if (center) addMarker(`! beat ${Number(note.time.toFixed(5))} 音符重叠`, 'overlap-marker', center, -34);
     }
@@ -352,7 +352,7 @@ export class SpatialPreview {
     const groups = new Map<string, { time: number; position: THREE.Vector3 }[]>();
     for (const kind of ['notes', 'ringNotes', 'obstacles'] as const) items(state.project, kind).forEach((n, index) => {
       const dt = n.time - state.beat, duration = Number(n.duration ?? 0);
-      if (dt > this.lookAhead || dt + duration < -.2) return;
+      if (dt > this.lookAhead || dt + (kind === 'notes' || (kind === 'ringNotes' && n.ringNoteType !== 1) ? 0 : duration) < 0) return;
       const hit: PreviewHit = { kind, index, lineIndex: n.lineIndex, lineLayer: n.lineLayer ?? 0 };
       const color = n.type === 3 ? new THREE.Color('#c398eb') : handColors[n.type === 1 ? 1 : 0];
       if (kind === 'notes') {

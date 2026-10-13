@@ -19,11 +19,16 @@ import { fillEndpoints, fillPlans, nearestFillPlan, buildFill, maxFillNotes, typ
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const icon = (name: string) => `<i data-lucide="${name}"></i>`;
 const escape = (s: any) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-let viewDefaults = { depthScale: defaultDepthScale, previewRange: defaultPreviewRange };
+let viewDefaults = { depthScale: defaultDepthScale, previewRange: defaultPreviewRange, depthMin: 2, depthMax: 20, previewMin: 1, previewMax: 8 };
 try {
   const saved = JSON.parse(localStorage.getItem('ringmapper-view-defaults') || 'null');
-  if (typeof saved?.depthScale === 'number' && Number.isFinite(saved.depthScale) && saved.depthScale >= .25 && saved.depthScale <= 10) viewDefaults.depthScale = saved.depthScale;
-  if (typeof saved?.previewRange === 'number' && Number.isFinite(saved.previewRange) && saved.previewRange >= 1 && saved.previewRange <= 64) viewDefaults.previewRange = saved.previewRange;
+  for (const [min, max, value] of [['depthMin', 'depthMax', 'depthScale'], ['previewMin', 'previewMax', 'previewRange']] as const) {
+    if (Number.isFinite(saved?.[min]) && saved[min] > 0 && Number.isFinite(saved?.[max]) && saved[max] > saved[min]) {
+      viewDefaults[min] = saved[min]; viewDefaults[max] = saved[max];
+    }
+    if (Number.isFinite(saved?.[value]) && saved[value] >= viewDefaults[min] && saved[value] <= viewDefaults[max]) viewDefaults[value] = saved[value];
+    viewDefaults[value] = Math.max(viewDefaults[min], Math.min(viewDefaults[max], viewDefaults[value]));
+  }
 } catch {}
 let noteOpacity = { hand: 1, foot: 1, linked: true };
 try {
@@ -55,13 +60,13 @@ app.innerHTML = `
 <div class="preview-viewport"><canvas id="preview" tabindex="0" aria-label="3D 圆环手部与下方脚部音符预览"></canvas></div>
 <button id="overlap-status" class="overlap-status" hidden aria-live="polite"></button><div class="scene-top"><div class="scene-song"><div class="song-details"><section class="songbar"><div class="song-cover" id="current-cover">◎</div><div class="song-info"><h1 id="song-name">未命名歌曲</h1><p id="artist-name">开始创作你的节奏</p></div><div class="song-meta"><span>BPM<strong id="bpm-display">120</strong></span><span>音符<strong id="note-count">0</strong></span></div><button id="settings" title="歌曲设置">${icon('settings-2')}</button></section>
 <div class="scene-status"><div class="project-title"><span class="status-dot"></span><span id="project-title">新建谱面</span><span class="badge" id="save-state">未保存</span></div></div></div><section class="difficulty-bar" aria-label="当前歌曲难度"><div class="difficulty-heading"><span>模式 · 难度</span></div><div id="difficulties"></div><span id="source-path">Ring/NormalRing.yaml</span></section></div><div class="header-actions"><button id="tutorial" title="新手教程" aria-label="新手教程"><b class="tutorial-question">?</b><span>新手教程</span></button><button id="help">${icon('keyboard')}<span>快捷键</span></button><button id="export">${icon('download')}<span>导出 ZIP</span></button><button id="save" class="primary">${icon('save')}<span>保存谱面</span></button></div></div>
-<div class="scene-camera"><span>${icon('orbit')}3D 空间预览</span><div><button id="camera-reset" title="重置相机">${icon('locate-fixed')}</button><button id="camera-near" title="拉近相机" aria-label="拉近相机">＋</button><button id="camera-far" title="拉远相机" aria-label="拉远相机">−</button><button id="view-settings" title="视图设置">${icon('sliders-horizontal')}<span>设置</span></button></div><div class="scene-snap"><label for="division">SNAP · 吸附</label><select id="division" aria-label="吸附预设">${[1,2,3,4,6,8,16,24,32].map(n => `<option value="${n}" ${n === 4 ? 'selected' : ''}>${n === 1 ? '1 beat' : `1/${n}`}</option>`).join('')}<option value="custom">自定义</option></select><label class="snap-custom">1 / <input id="snap-denominator" aria-label="自定义吸附分母" title="输入分母，例如 5 表示 1/5 拍" type="number" step="any" min="0.000001" max="1000000" value="4">拍</label></div><label class="scene-depth">纵深拉伸<input id="depth-zoom" aria-label="3D 纵深拉伸" type="range" min="0.25" max="10" step="any" value="${viewDefaults.depthScale}"><output id="depth-zoom-value">${viewDefaults.depthScale.toFixed(2)}×</output></label><label class="scene-depth">预览范围<input id="preview-range" aria-label="预览范围（拍）" type="range" min="1" max="64" step="any" value="${viewDefaults.previewRange}"><output id="preview-range-value">${viewDefaults.previewRange.toFixed(2)} 拍</output></label></div>
+<div class="scene-camera"><span>${icon('orbit')}3D 空间预览</span><div><button id="camera-reset" title="重置相机">${icon('locate-fixed')}</button><button id="camera-near" title="拉近相机" aria-label="拉近相机">＋</button><button id="camera-far" title="拉远相机" aria-label="拉远相机">−</button><button id="view-settings" title="视图设置">${icon('sliders-horizontal')}<span>设置</span></button></div><div class="scene-snap"><label for="division">SNAP · 吸附</label><select id="division" aria-label="吸附预设">${[1,2,3,4,6,8,16,24,32].map(n => `<option value="${n}" ${n === 4 ? 'selected' : ''}>${n === 1 ? '1 beat' : `1/${n}`}</option>`).join('')}<option value="custom">自定义</option></select><label class="snap-custom">1 / <input id="snap-denominator" aria-label="自定义吸附分母" title="输入分母，例如 5 表示 1/5 拍" type="number" step="any" min="0.000001" max="1000000" value="4">拍</label></div><label class="scene-depth">纵深拉伸<input id="depth-zoom" aria-label="3D 纵深拉伸" type="range" min="${viewDefaults.depthMin}" max="${viewDefaults.depthMax}" step="any" value="${viewDefaults.depthScale}"><output id="depth-zoom-value">${viewDefaults.depthScale.toFixed(2)}×</output></label><label class="scene-depth">预览范围<input id="preview-range" aria-label="预览范围（拍）" type="range" min="${viewDefaults.previewMin}" max="${viewDefaults.previewMax}" step="any" value="${viewDefaults.previewRange}"><output id="preview-range-value">${viewDefaults.previewRange.toFixed(2)} 拍</output></label></div>
 <section class="inspector-panel" id="tools-panel" aria-label="编辑工具子窗口"><div class="panel-heading" id="tools-handle" title="拖动移动工具窗口，双击复位"><span>${icon('mouse-pointer-2')}编辑工具</span><div><span class="subtle" id="selection-count">未选中</span><button id="toggle-tools" aria-label="收起编辑工具" aria-controls="tools-body" aria-expanded="true">−</button></div></div><div id="tools-body"><div class="kind-tabs"><button data-mode="notes" class="active" title="音符（1）">音符</button><button data-mode="obstacles" title="障碍物（2）">障碍物</button><button data-mode="events" title="灯光（3）">灯光事件</button></div><div id="inspector"></div><div class="mirror-controls"><button id="mirror-left-right" title="左右镜像，保留颜色（Ctrl+F）">${mirrorArt('left-right')}<span>左右镜像</span></button><button id="mirror-up-down" title="沿水平轴翻转上下两半">${mirrorArt('up-down')}<span>上下镜像</span></button><button id="mirror-diagonal" title="上下、左右同时翻转，保留颜色">${mirrorArt('diagonal')}<span>对角镜像</span></button></div><div class="edit-actions"><button id="undo" title="撤销 Ctrl+Z">${icon('undo-2')}</button><button id="redo" title="重做 Ctrl+Y">${icon('redo-2')}</button><button id="copy" title="复制 Ctrl+C">${icon('copy')}</button><button id="paste" title="粘贴 Ctrl+V">${icon('clipboard-paste')}</button><button id="delete" title="删除选中项（Del）" aria-label="删除选中项（Del）">${icon('trash-2')}<span>Del</span></button></div><div class="inspector-bottom"><button id="range-select">范围选取</button><button id="group">打组</button><button id="fill" hidden title="沿圆环填充两个手部音符之间的空位">填充</button><button id="join-group" hidden>加入组</button><button id="check">${icon('scan-line')}检查谱面</button></div></div></section>
 <section id="fill-panel" class="fill-panel" aria-label="圆环填充" hidden></section>
 <section class="timeline-panel is-collapsed" id="timeline-panel" aria-label="时间轴子窗口" inert><div class="timeline-toolbar"><div class="timeline-title">${icon('audio-lines')}时间轴 <span class="badge" id="visible-range">BEATS</span></div><div class="timeline-options"><button id="hide-timeline" title="向下收起时间轴">向下收起 ↓</button><button id="follow" title="定位到播放头">${icon('locate-fixed')}</button></div></div><div class="timeline-wrap"><canvas id="timeline" aria-label="谱面时间轴"></canvas></div><input id="scroll" class="timeline-scroll" type="range" min="0" max="256" step="0.25" value="0" aria-label="滚动时间轴"></section>
 
 <button class="timeline-toggle" id="toggle-timeline" aria-controls="timeline-panel" aria-expanded="false" title="展开传统时间轴">${icon('audio-lines')}<span>传统时间轴 ↑</span></button><footer class="transport"><div class="transport-buttons"><button id="home" title="回到开始">${icon('skip-back')}</button><button id="play" class="play-button" title="播放 / 暂停 Space">${icon('play')}</button></div><div class="transport-time"><strong id="time-display">00:00.000</strong><span>BEAT <input id="beat-input" type="number" min="0" step="0.25" value="0" aria-label="当前节拍"></span></div><div class="seek-wrap"><div id="seek-bookmarks" class="seek-bookmarks" aria-label="歌曲书签"></div><input id="seek" type="range" min="0" max="256" step="0.01" value="0" aria-label="播放进度"></div><div class="speed-control"><label class="speed-label" title="歌曲播放速度">倍速<input id="speed" aria-label="播放速度" type="range" min="0.1" max="2" step="any" value="1"><output id="speed-value">1.00×</output></label><button id="speed-reset" hidden title="恢复默认播放速度" aria-label="恢复默认播放速度">↺ 1×</button></div><div class="metronome-control"><button id="metronome" title="节拍器开关" aria-label="节拍器开关" aria-pressed="false">${icon('bell')}</button><input id="metronome-volume" aria-label="节拍器音量" title="节拍器音量" type="range" min="0" max="1" step="any" value="0.5"></div><label class="volume-label">${icon('volume-2')}<input id="volume" type="range" min="0" max="1" step="0.05" value="0.7" aria-label="音量"></label></footer>
-<div id="toast" role="status"></div><dialog id="modal"><div id="modal-content"></div></dialog><input id="import-input" type="file" accept=".zip,.yaml,.yml" multiple hidden><input id="audio-input" type="file" accept="audio/ogg,audio/mpeg,audio/wav" hidden><input id="cover-input" type="file" accept="image/png,image/jpeg,image/webp" hidden></section></main></div>`;
+<div id="toast" role="status"></div><dialog id="modal"><div id="modal-content"></div></dialog><input id="import-input" type="file" accept=".zip,.yaml,.yml" multiple hidden><input id="audio-input" type="file" accept="audio/ogg,audio/mpeg,audio/wav,.zip" hidden><input id="cover-input" type="file" accept="image/png,image/jpeg,image/webp" hidden></section></main></div>`;
 function iconsRefresh() { createIcons({ icons }); }
 function notify(message: string) { $('toast').textContent = message; $('toast').classList.add('show'); setTimeout(() => $('toast').classList.remove('show'), 4500); }
 function resetLibraryUrls() { for (const url of libraryUrls.values()) void url.then(u => { if (u) URL.revokeObjectURL(u); }); libraryUrls.clear(); }
@@ -112,7 +117,7 @@ function changed() {
   diagnosticsDirty = true;
   dirty = JSON.stringify(project) !== savedSignature || localAssets.size > 0;
   $('save-state').textContent = dirty ? '有未保存修改' : '已保存'; $('save-state').classList.toggle('unsaved', dirty);
-  clearTimeout(draftTimer); draftTimer = setTimeout(() => { try { void stored<Draft>('draft', { project: structuredClone(project), assets: new Map(localAssets), date: Date.now() }).catch(() => notify('浏览器草稿空间不足，请保存或导出 ZIP')); } catch { notify('浏览器草稿空间不足，请保存到本地'); } }, 600);
+  clearTimeout(draftTimer); draftTimer = setTimeout(() => { try { void stored<Draft | null>('draft', dirty ? { project: structuredClone(project), assets: new Map(localAssets), date: Date.now() } : null).catch(() => notify('浏览器草稿空间不足，请保存或导出 ZIP')); } catch { notify('浏览器草稿空间不足，请保存到本地'); } }, 600);
   renderSummary(); draw();
 }
 function mutate(fn: () => void) { history.push(project); fn(); changed(); renderInspector(); }
@@ -227,7 +232,8 @@ async function loadAudio(url: string) {
   } catch { if (token === waveToken) notify('无法生成音频波形，仍可继续编辑谱面'); }
 }
 function modal(title: string, html: string) { $('modal').classList.remove('tutorial-dialog'); $('modal-content').innerHTML = `<div class="modal-heading"><h2>${title}</h2><button id="close-modal">${icon('x')}</button></div>${html}`; if (!$<HTMLDialogElement>('modal').open) $<HTMLDialogElement>('modal').showModal(); iconsRefresh(); }
-function showTutorial(index = 0) { modal('新手教程', tutorialHtml(Math.max(0, Math.min(tutorialSteps.length - 1, index)))); $('modal').classList.add('tutorial-dialog'); }
+try { $('tutorial').classList.toggle('tutorial-unseen', localStorage.getItem('ringmapper-tutorial-seen') !== 'true'); } catch { $('tutorial').classList.add('tutorial-unseen'); }
+function showTutorial(index = 0) { $('tutorial').classList.remove('tutorial-unseen'); try { localStorage.setItem('ringmapper-tutorial-seen', 'true'); } catch {} modal('新手教程', tutorialHtml(Math.max(0, Math.min(tutorialSteps.length - 1, index)))); $('modal').classList.add('tutorial-dialog'); }
 function confirmDiscard(action: () => void) {
   if (!dirty) { action(); return; }
   modal('离开当前谱面？', '<p>当前修改尚未保存。请先保存，或选择放弃修改后继续。</p><div class="modal-actions"><button id="discard" class="danger">放弃修改并继续</button><button id="cancel-modal">继续编辑</button></div>');
@@ -395,7 +401,7 @@ function settings() {
   const names = ['歌曲名称', '艺术家', '谱师', 'BPM', '音频偏移（秒）', '歌曲时长（秒）'];
   const sets = [...(project.info.difficultyCiphermapSets ?? []), ...(project.info.difficultyBeatmapSets ?? [])];
   const entry = sets.flatMap((s: any) => s.difficultyCiphermaps ?? s.difficultyBeatmaps ?? []).find((e: any) => (e.ciphermapFilename ?? e.beatmapFilename) === project.chartPath) ?? {};
-  modal('歌曲与难度设置', `<div class="field-grid settings-grid">${values.map((key, i) => `<label>${names[i]}<input data-info="${key}" type="${i > 2 ? 'number' : 'text'}" step="any" value="${escape(project.info[key])}"></label>`).join('')}${['noteJumpMovementSpeed', 'noteJumpStartBeatOffset', 'ringNoteJumpMovementSpeed', 'ringNoteJumpStartBeatOffset'].map((key, i) => `<label>${['手部跳跃速度', '手部出生拍偏移', '脚部跳跃速度', '脚部出生拍偏移'][i]}<input data-difficulty-field="${key}" type="number" step="any" value="${escape(entry[key] ?? (i % 2 ? 2 : 10))}"></label>`).join('')}</div><p class="field-help">偏移约定：音频秒数 = 节拍 × 60 / BPM + 偏移。需试听校准。推荐 OGG 音频与 512 × 512 PNG 封面。</p><div class="modal-actions"><button id="choose-audio">${icon('music-2')}导入音频</button><button id="choose-cover">${icon('image')}导入封面</button><button id="tap-tempo">点击测 BPM</button><button id="apply-settings" class="primary">应用设置</button></div>`);
+  modal('歌曲与难度设置', `<div class="field-grid settings-grid">${values.map((key, i) => `<label>${names[i]}<input data-info="${key}" type="${i > 2 ? 'number' : 'text'}" step="any" value="${escape(project.info[key])}"></label>`).join('')}${['noteJumpMovementSpeed', 'noteJumpStartBeatOffset', 'ringNoteJumpMovementSpeed', 'ringNoteJumpStartBeatOffset'].map((key, i) => `<label>${['手部跳跃速度', '手部出生拍偏移', '脚部跳跃速度', '脚部出生拍偏移'][i]}<input data-difficulty-field="${key}" type="number" step="any" value="${escape(entry[key] ?? (i % 2 ? 2 : 10))}"></label>`).join('')}</div><p class="field-help">偏移约定：音频秒数 = 节拍 × 60 / BPM + 偏移。需试听校准。推荐 OGG 音频与 512 × 512 PNG 封面。</p><div class="modal-actions"><button id="choose-audio">${icon('music-2')}导入音频 / ZIP</button><button id="choose-cover">${icon('image')}导入封面</button><button id="tap-tempo">点击测 BPM</button><button id="apply-settings" class="primary">应用设置</button></div>`);
   $('choose-audio').onclick = () => $<HTMLInputElement>('audio-input').click(); $('choose-cover').onclick = () => $<HTMLInputElement>('cover-input').click();
   const taps: number[] = []; $('tap-tempo').onclick = () => { if (!playing) void togglePlay(); if (taps.length && performance.now() - taps.at(-1)! > 2500) taps.length = 0; taps.push(performance.now()); if (taps.length > 8) taps.shift(); if (taps.length > 1) { const bpm = Math.round(60000 * (taps.length - 1) / (taps.at(-1)! - taps[0])); (document.querySelector('[data-info="beatsPerMinute"]') as HTMLInputElement).value = String(bpm); $('tap-tempo').textContent = `${bpm} BPM · 继续点击`; } };
   $('apply-settings').onclick = () => {
@@ -455,12 +461,13 @@ function addDifficulty(initialMode = 'Ring', initialDifficulty = 'Hard') {
 async function importFiles(files: File[]) {
   try {
     let p = newProject(); const assets = new Map<string, Blob>();
-    if (files[0]?.name.endsWith('.zip')) {
+    if (/\.zip$/i.test(files[0]?.name ?? '')) {
       const zip = await JSZip.loadAsync(files[0]); const names = Object.keys(zip.files).filter(n => !zip.files[n].dir);
       if (names.length > 3000) throw new Error('ZIP 文件数量过多');
       const infoName = names.find(n => /(^|\/)Info\.yaml$/i.test(n)); if (!infoName) throw new Error('ZIP 中缺少 Info.yaml');
       const prefix = infoName.slice(0, -'Info.yaml'.length); let bytes = 0;
       for (const name of names.filter(n => n.startsWith(prefix))) { const relative = name.slice(prefix.length); if (!relative || relative.includes('..') || relative.startsWith('/') || relative.includes(':')) continue; const blob = await zip.files[name].async('blob'); bytes += blob.size; if (bytes > 200_000_000) throw new Error('解压内容超过 200MB'); assets.set(relative, blob); }
+      if (infoName.slice(prefix.length) !== 'Info.yaml') { assets.set('Info.yaml', assets.get(infoName.slice(prefix.length))!); assets.delete(infoName.slice(prefix.length)); }
       p.info = readYaml(await blobText(assets.get('Info.yaml')!));
       const entries = [...(p.info.difficultyCiphermapSets ?? []), ...(p.info.difficultyBeatmapSets ?? [])].flatMap((set: any) => set.difficultyCiphermaps ?? set.difficultyBeatmaps ?? []);
       const events = new Set(entries.map((entry: any) => String(entry.eventmapFilename ?? '').replaceAll('\\', '/')));
@@ -501,7 +508,7 @@ const actions: Record<string, () => void> = {
   'add-at-beat': () => add(mode === 'notes' ? 'notes' : mode, mode === 'events' ? eventType : 0), 'add-foot': () => add('ringNotes'), 'hold-add': () => add('ringNotes', 0, 0, snap(beat, division), true),
   metronome: () => { metronome = !metronome; $('metronome').classList.toggle('active', metronome); $('metronome').setAttribute('aria-pressed', String(metronome)); if (metronome) clickBeat(); },
   'view-settings': () => {
-    modal('编辑设置', `<div class="view-defaults"><label>默认纵深拉伸（×）<input id="default-depth" aria-label="默认纵深拉伸" type="number" min="0.25" max="10" step="any" required value="${viewDefaults.depthScale}"></label><label>默认预览范围（拍）<input id="default-preview-range" aria-label="默认预览范围" type="number" min="1" max="64" step="any" required value="${viewDefaults.previewRange}"></label></div><p class="field-help">修改默认值后点击完成，立即应用并记住。场景中的滑杆仅临时调整，不覆盖默认值。</p><label class="settings-opacity">圆环不透明度<input id="ring-opacity" aria-label="圆环不透明度" type="range" min="0" max="100" step="any" value="${(spatialPreview?.ringOpacity ?? .22) * 100}"><output id="ring-opacity-value">${Math.round((spatialPreview?.ringOpacity ?? .22) * 100)}%</output></label><fieldset class="note-opacity-settings"><legend>音符不透明度</legend><label class="check-setting"><input id="note-opacity-linked" type="checkbox" ${noteOpacity.linked ? 'checked' : ''}>同步调整手部和脚部</label>${(['hand', 'foot'] as const).map(key => `<label class="settings-opacity">${key === 'hand' ? '手部音符' : '脚部音符'}<input id="${key}-opacity" aria-label="${key === 'hand' ? '手部' : '脚部'}音符不透明度" type="range" min="0" max="100" step="any" value="${noteOpacity[key] * 100}"><output id="${key}-opacity-value">${Math.round(noteOpacity[key] * 100)}%</output></label>`).join('')}<p class="field-help">0% 完全透明，100% 不透明。脚部长音符同步调整，选中标记仍清晰显示。</p></fieldset><label class="check-setting"><input id="wheel-reverse" type="checkbox" ${wheelReverse ? 'checked' : ''}>歌曲进度滚轮反向</label><p class="field-help">默认向上滚动前进，勾选后向下滚动前进。Ctrl＋滚轮切换吸附档位；Alt＋滚轮编辑脚部长音符长度。</p><div class="modal-actions"><button id="view-apply" class="primary">完成</button></div>`);
+    modal('编辑设置', `<div class="view-defaults">${([ ["depthMin", "纵深最小值"], ["depthMax", "纵深最大值"], ["previewMin", "预览范围最小值"], ["previewMax", "预览范围最大值"] ] as const).map(([key, label]) => `<label>${label}<input id="${key}" aria-label="${label}" type="number" min="0.000001" step="any" required value="${viewDefaults[key]}"></label>`).join('')}<label>默认纵深拉伸（×）<input id="default-depth" aria-label="默认纵深拉伸" type="number" min="0.000001" step="any" required value="${viewDefaults.depthScale}"></label><label>默认预览范围（拍）<input id="default-preview-range" aria-label="默认预览范围" type="number" min="0.000001" step="any" required value="${viewDefaults.previewRange}"></label></div><p class="field-help">修改默认值后点击完成，立即应用并记住。场景中的滑杆仅临时调整，不覆盖默认值。</p><label class="settings-opacity">圆环不透明度<input id="ring-opacity" aria-label="圆环不透明度" type="range" min="0" max="100" step="any" value="${(spatialPreview?.ringOpacity ?? .22) * 100}"><output id="ring-opacity-value">${Math.round((spatialPreview?.ringOpacity ?? .22) * 100)}%</output></label><fieldset class="note-opacity-settings"><legend>音符不透明度</legend><label class="check-setting"><input id="note-opacity-linked" type="checkbox" ${noteOpacity.linked ? 'checked' : ''}>同步调整手部和脚部</label>${(['hand', 'foot'] as const).map(key => `<label class="settings-opacity">${key === 'hand' ? '手部音符' : '脚部音符'}<input id="${key}-opacity" aria-label="${key === 'hand' ? '手部' : '脚部'}音符不透明度" type="range" min="0" max="100" step="any" value="${noteOpacity[key] * 100}"><output id="${key}-opacity-value">${Math.round(noteOpacity[key] * 100)}%</output></label>`).join('')}<p class="field-help">0% 完全透明，100% 不透明。脚部长音符同步调整，选中标记仍清晰显示。</p></fieldset><label class="check-setting"><input id="wheel-reverse" type="checkbox" ${wheelReverse ? 'checked' : ''}>歌曲进度滚轮反向</label><p class="field-help">默认向上滚动前进，勾选后向下滚动前进。Ctrl＋滚轮切换吸附档位；Alt＋滚轮调整纵深；指向脚部音符时编辑长音符长度。</p><div class="modal-actions"><button id="view-apply" class="primary">完成</button></div>`);
     $('ring-opacity').oninput = () => { const value = Number($<HTMLInputElement>('ring-opacity').value); spatialPreview?.setRingOpacity(value / 100); $('ring-opacity-value').textContent = `${Math.round(value)}%`; };
     const applyOpacity = (key: 'hand' | 'foot') => {
       noteOpacity[key] = Number($<HTMLInputElement>(`${key}-opacity`).value) / 100;
@@ -514,17 +521,26 @@ const actions: Record<string, () => void> = {
     $('note-opacity-linked').onchange = () => { noteOpacity.linked = $<HTMLInputElement>('note-opacity-linked').checked; applyOpacity('hand'); };
     $('wheel-reverse').onchange = () => { wheelReverse = $<HTMLInputElement>('wheel-reverse').checked; localStorage.setItem('ringmapper-wheel-reverse', String(wheelReverse)); };
     $('view-apply').onclick = () => {
-      const depthInput = $<HTMLInputElement>('default-depth'), rangeInput = $<HTMLInputElement>('default-preview-range');
-      if (!depthInput.reportValidity() || !rangeInput.reportValidity()) return;
-      const depthScale = Number(depthInput.value), previewRange = Number(rangeInput.value);
-      if (depthScale !== viewDefaults.depthScale) setDepthZoom(depthScale);
-      if (previewRange !== viewDefaults.previewRange) setPreviewRange(previewRange);
-      viewDefaults = { depthScale, previewRange };
+      const next = { ...viewDefaults };
+      for (const key of ['depthMin', 'depthMax', 'previewMin', 'previewMax', 'depthScale', 'previewRange'] as const) {
+        const input = $<HTMLInputElement>(key === 'depthScale' ? 'default-depth' : key === 'previewRange' ? 'default-preview-range' : key);
+        if (!input.reportValidity() || !Number.isFinite(Number(input.value))) return;
+        next[key] = Number(input.value);
+      }
+      if (next.depthMin >= next.depthMax || next.previewMin >= next.previewMax) { notify('最小值必须小于最大值'); return; }
+      if (next.depthScale < next.depthMin || next.depthScale > next.depthMax || next.previewRange < next.previewMin || next.previewRange > next.previewMax) { notify('默认值必须在对应的最小值和最大值之间'); return; }
+      const depth = next.depthScale !== viewDefaults.depthScale ? next.depthScale : scale / 48;
+      const range = next.previewRange !== viewDefaults.previewRange ? next.previewRange : Number($<HTMLInputElement>('preview-range').value);
+      viewDefaults = next;
+      for (const [id, min, max] of [['depth-zoom', next.depthMin, next.depthMax], ['preview-range', next.previewMin, next.previewMax]] as const) {
+        const input = $<HTMLInputElement>(id); input.min = String(min); input.max = String(max);
+      }
+      setDepthZoom(depth); setPreviewRange(range);
       try { localStorage.setItem('ringmapper-view-defaults', JSON.stringify(viewDefaults)); } catch { notify('默认值已应用，但浏览器无法记住设置'); }
       $<HTMLDialogElement>('modal').close();
     };
   },
-  help: () => modal('快捷键与操作', `<div class="shortcut-list">${[['Space', '播放 / 暂停'], ['Ctrl + Z / Y', '撤销 / 重做'], ['Ctrl + C / V', '复制 / 在播放头粘贴'], ['Ctrl + S', '保存谱面'], ['Ctrl + F', '左右镜像'], ['Ctrl + B', '在当前拍添加书签'], ['Ctrl + A', '选择当前类别中视野内的对象'], ['Delete', '优先删除选中项；未选中时删除鼠标下对象'], ['Q', '切换红蓝放置颜色'], ['1 / 2 / 3', '切换音符 / 障碍物 / 灯光'], ['按住 Shift', '暂时禁止放置（保留多选与相机控制）'], ['← / →', '前后移动一个吸附单位'], ['Shift + 点击', '多选'], ['拖动时间轴音符', '移动节拍和位置'], ['Alt + 拖动手部音符', '更改击打方向'], ['时间轴 Alt + 拖动脚部', '调整持续时长'], ['鼠标中键', '切换类型 0 / 1'], ['时间轴右键', '删除音符'], ['3D 右键拖动 / WASD', '旋转 / 移动相机'], ['3D 滚轮', '向上前进 / 向下后退，可在设置反向'], ['3D 右键 + Shift / 空格', '降低 / 升高相机'], ['3D Alt + 滚轮', '鼠标指向脚部音符，向上加长 / 向下缩短一个吸附单位；0 拍转为短音符'], ['3D Alt + 左键拖动', '拖动音符到对应轨道的其他位置'], ['3D Alt + 点击', '直接选中与圆环重叠的已有音符'], ['3D ＋ / −', '拉近 / 拉远相机'], ['Ctrl + 滚轮', '切换 SNAP 预设'], ['双击组内音符', '选中整个组']].map(([k, v]) => `<div><kbd>${k}</kbd><span>${v}</span></div>`).join('')}</div><p class="field-help">源文件保存前自动备份到 .ringmapper-backups。浏览器会保存最近一次工作草稿；本工具不连接官方账号。</p>`),
+  help: () => modal('快捷键与操作', `<div class="shortcut-list">${[['Space', '播放 / 暂停'], ['Ctrl + Z / Y', '撤销 / 重做'], ['Ctrl + C / V', '复制 / 在播放头粘贴'], ['Ctrl + S', '保存谱面'], ['Ctrl + F', '左右镜像'], ['Ctrl + B', '在当前拍添加书签'], ['Ctrl + A', '选择当前类别中视野内的对象'], ['Delete', '优先删除选中项；未选中时删除鼠标下对象'], ['Q', '切换红蓝放置颜色'], ['1 / 2 / 3', '切换音符 / 障碍物 / 灯光'], ['按住 Shift', '暂时禁止放置（保留多选与相机控制）'], ['← / →', '前后移动一个吸附单位'], ['Shift + 点击', '多选'], ['拖动时间轴音符', '移动节拍和位置'], ['Alt + 拖动手部音符', '更改击打方向'], ['时间轴 Alt + 拖动脚部', '调整持续时长'], ['鼠标中键', '切换类型 0 / 1'], ['时间轴右键', '删除音符'], ['3D 右键拖动 / WASD', '旋转 / 移动相机'], ['3D 滚轮', '向上前进 / 向下后退，可在设置反向'], ['3D 右键 + Shift / 空格', '降低 / 升高相机'], ['3D Alt + 滚轮', '调整纵深；鼠标指向脚部音符时，向上加长 / 向下缩短一个吸附单位；0 拍转为短音符'], ['3D Alt + 左键拖动', '拖动音符到对应轨道的其他位置'], ['3D Alt + 点击', '直接选中与圆环重叠的已有音符'], ['3D ＋ / −', '拉近 / 拉远相机'], ['Ctrl + 滚轮', '切换 SNAP 预设'], ['双击组内音符', '选中整个组']].map(([k, v]) => `<div><kbd>${k}</kbd><span>${v}</span></div>`).join('')}</div><p class="field-help">源文件保存前自动备份到 .ringmapper-backups。浏览器会保存最近一次工作草稿；本工具不连接官方账号。</p>`),
 };
 app.addEventListener('click', e => {
   const el = (e.target as HTMLElement).closest<HTMLElement>('button'); if (!el) return;
@@ -585,9 +601,20 @@ function setPlaybackRate(rate: number) {
 $('speed').addEventListener('input', () => setPlaybackRate(Number($<HTMLInputElement>('speed').value)));
 $('volume').addEventListener('input', () => { audio.volume = Number($<HTMLInputElement>('volume').value); });
 $('import-input').addEventListener('change', () => { const input = $<HTMLInputElement>('import-input'); if (input.files?.length) void importFiles([...input.files]); input.value = ''; });
-$('audio-input').addEventListener('change', () => {
-  const file = $<HTMLInputElement>('audio-input').files?.[0]; if (!file) return;
-  mutate(() => { project.info.songFilename = file.name; localAssets.set(file.name, file); }); void loadAudio(URL.createObjectURL(file));
+$('audio-input').addEventListener('change', async () => {
+  const input = $<HTMLInputElement>('audio-input'); let file = input.files?.[0]; input.value = ''; if (!file) return;
+  if (/\.zip$/i.test(file.name)) {
+    try {
+      const zip = await JSZip.loadAsync(file);
+      if (Object.keys(zip.files).some(name => /(^|\/)Info\.yaml$/i.test(name))) { $<HTMLDialogElement>('modal').close(); const archive = file; confirmDiscard(() => { void importFiles([archive]); }); return; }
+      const tracks = Object.values(zip.files).filter(entry => !entry.dir && /\.(ogg|mp3|wav)$/i.test(entry.name) && !entry.name.startsWith('__MACOSX/'));
+      if (tracks.length !== 1) { notify(tracks.length ? 'ZIP 包含多首音频，请每个 ZIP 仅放入一首歌曲' : 'ZIP 中没有 OGG、MP3 或 WAV 音频'); return; }
+      const blob = await tracks[0].async('blob'); if (blob.size > 200_000_000) throw new Error('音频超过 200MB');
+      file = new File([blob], tracks[0].name.split('/').pop()!);
+    } catch (error: any) { notify('ZIP 导入失败：' + error.message); return; }
+  }
+  const audioFile = file;
+  mutate(() => { project.info.songFilename = audioFile.name; localAssets.set(audioFile.name, audioFile); }); void loadAudio(URL.createObjectURL(audioFile));
   audio.addEventListener('loadedmetadata', () => { if (Number.isFinite(audio.duration)) { project.info.songDuration = audio.duration; const input = document.querySelector<HTMLInputElement>('[data-info="songDuration"]'); if (input) input.value = String(audio.duration); changed(); } }, { once: true }); notify('音频已载入');
 });
 $('cover-input').addEventListener('change', async () => {
@@ -714,7 +741,8 @@ preview.addEventListener('wheel', e => {
   if (e.ctrlKey) { cycleSnap(delta); return; }
   if (e.altKey) {
     const { x, y } = canvasPoint(e, preview), hit = spatialPreview?.pick(x, y, 'notes');
-    if (hit?.kind !== 'ringNotes' || hit.index === undefined || spatialDrag) { holdWheel.index = -1; return; }
+    if (spatialDrag) return;
+    if (hit?.kind !== 'ringNotes' || hit.index === undefined) { holdWheel.index = -1; setDepthZoom(scale / 48 - delta / 100); return; }
     const now = performance.now();
     if (holdWheel.index !== hit.index || now - holdWheel.last > 300 || Math.sign(delta) !== Math.sign(holdWheel.delta)) holdWheel = { index: hit.index, delta: 0, last: now };
     holdWheel.delta += delta; holdWheel.last = now;
@@ -733,13 +761,14 @@ preview.addEventListener('wheel', e => {
 preview.addEventListener('contextmenu', e => e.preventDefault());
 preview.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
 function setDepthZoom(value: number) {
-  const zoom = Math.max(.25, Math.min(10, value));
+  const zoom = Math.max(viewDefaults.depthMin, Math.min(viewDefaults.depthMax, value));
   scale = 48 * zoom; spatialPreview?.setDepthScale(zoom);
   $<HTMLInputElement>('depth-zoom').value = String(zoom); $('depth-zoom-value').textContent = `${zoom.toFixed(2)}×`;
   draw(); updateTransport();
 }
 $('depth-zoom').addEventListener('input', () => setDepthZoom(Number($<HTMLInputElement>('depth-zoom').value)));
 function setPreviewRange(value: number) {
+  value = Math.max(viewDefaults.previewMin, Math.min(viewDefaults.previewMax, value));
   $<HTMLInputElement>('preview-range').value = String(value);
   if (spatialPreview) spatialPreview.lookAhead = value;
   $('preview-range-value').textContent = `${value.toFixed(2)} 拍`; draw();
@@ -879,7 +908,8 @@ function chartEntries() {
 }
 async function openLocalChart(filename: string) {
   try {
-    updateMetadata(project); localAssets.set(project.chartPath, new Blob([writeYaml(project.chart)])); localAssets.set(project.eventPath, new Blob([writeYaml(project.event)]));
+    const wasDirty = dirty;
+    if (wasDirty) { updateMetadata(project); localAssets.set(project.chartPath, new Blob([writeYaml(project.chart)])); localAssets.set(project.eventPath, new Blob([writeYaml(project.event)])); }
     const read = async (name: string) => localAssets.get(name) ?? (workspaceReady && workspace && project.workspaceId === workspace.id && project.songId ? await workspace.asset(project.songId, name) : undefined);
     const chartBlob = await read(filename); if (!chartBlob) throw new Error('找不到此难度文件，请重新授权原目录');
     const chart = readYaml(await blobText(chartBlob));
@@ -887,6 +917,7 @@ async function openLocalChart(filename: string) {
     const eventPath = String(entry?.eventmapFilename ?? filename.replace(/\.yaml$/, 'Event.yaml')).replaceAll('\\', '/');
     const eventBlob = await read(eventPath); const event = eventBlob ? readYaml(await blobText(eventBlob)) : { version: chart.version, events: [] };
     stop(); project.chart = chart; project.event = event; project.chartPath = filename; project.eventPath = eventPath; selected = []; history.clear();
+    savedSignature = wasDirty ? '' : JSON.stringify(project);
     changed(); renderInspector();
   } catch (e: any) { notify('切换难度失败：' + e.message); }
 }

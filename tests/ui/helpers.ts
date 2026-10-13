@@ -19,6 +19,11 @@ export async function selectLastVisibleNote(page: Page, kind: 'notes' | 'ringNot
 
 /** Stable scale for existing screen-coordinate interaction fixtures. Defaults are covered separately. */
 export async function unitDepth(page: Page) {
+  await page.locator('#view-settings').click();
+  await page.locator('#depthMin').fill('0.25');
+  await page.locator('#previewMax').fill('64');
+  await page.locator('#view-apply').click();
+  await page.locator('#preview-range').fill('8'); await page.locator('#preview-range').dispatchEvent('input');
   await page.locator('#depth-zoom').evaluate((el: HTMLInputElement) => { el.value = '1'; el.dispatchEvent(new Event('input', { bubbles: true })); });
 }
 
