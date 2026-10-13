@@ -1,4 +1,4 @@
-﻿import { test, expect, type Page } from '@playwright/test';
+﻿import { test, expect, type Page } from './fixtures';
 import JSZip from 'jszip';
 import fs from 'node:fs/promises';
 import { parse } from 'yaml';
@@ -8,11 +8,9 @@ async function beat(page: Page, n: number) { await page.locator('#beat-input').f
 async function field(page: Page, key: string, n: string) { await page.locator(`[data-field="${key}"]`).fill(n); await page.locator(`[data-field="${key}"]`).dispatchEvent('change'); }
 async function exported(page: Page) { const pending = page.waitForEvent('download'); await page.locator('#export').click(); const download = await pending; const zip = await JSZip.loadAsync(await fs.readFile((await download.path())!)); return parse(await zip.file('Ring/NormalRing.yaml')!.async('string')); }
 
-test('empty difficulties create the exact mode and rank; folder button targets current song or Map', async ({ page }) => {
-  const requested: string[] = [];
-  await page.route('**/api/open-folder', route => { requested.push(route.request().postDataJSON().song); return route.fulfill({ json: { path: 'Map' } }); });
+test('empty difficulties create the exact mode and rank; folder button selects a local workspace', async ({ page }) => {
   await page.goto('/'); await expect(page.locator('#song-name')).toHaveText('曹操');
-  await page.locator('#workspace-folder').click(); expect(requested).toEqual(['caocao']);
+  await page.locator('#workspace-folder').click(); await expect(page.locator('#workspace-name')).toHaveText('Map');
   await expect(page.locator('#mode-name, #add-difficulty')).toHaveCount(0);
   for (const mode of ['Ring', 'RingDance']) await expect(page.locator(`[data-difficulty-mode="${mode}"] .difficulty`)).toHaveCount(5);
   const empty = page.locator('[data-create-mode="RingDance"][data-create-difficulty="Expert"]');
@@ -22,7 +20,7 @@ test('empty difficulties create the exact mode and rank; folder button targets c
   await expect(empty).toHaveCount(0); await expect(page.locator('[data-chart="RingDance/ExpertRingDance.yaml"]')).toHaveClass(/active/);
   await page.locator('[data-chart="Ring/NormalRing.yaml"]').click(); await expect(page.locator('#source-path')).toHaveText('Ring/NormalRing.yaml');
   await page.locator('#new-project').click(); await page.locator('#discard').click(); await page.locator('#apply-settings').click();
-  await page.locator('#workspace-folder').click(); expect(requested).toEqual(['caocao', '']);
+  await page.locator('#workspace-folder').click(); await expect(page.locator('#workspace-name')).toHaveText('Map');
 });
 
 test('illustrated tutorial covers all chapters without branded wording and keeps actions accessible at 720p', async ({ page }) => {

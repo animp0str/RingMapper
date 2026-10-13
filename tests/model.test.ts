@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { newProject, newItem, validateChart, decodeText, readYaml, writeYaml, History, beatToSeconds, secondsToBeat, snap, updateMetadata, sortedProject } from '../src/model.ts';
-import { safePath, catalog } from '../server/api.ts';
+import { LocalWorkspace, localPath } from '../src/workspace.ts';
+import { ReadDirectory } from './read-directory.ts';
 import { handPositions, handLane, isHandPosition, handWorldPosition, noteDepth, durationExtent, stage } from '../src/layout.ts';
 import { bands, timelineHit, timelineLane } from '../src/render.ts';
 test('beat and audio offset convert both ways; snapping retains fractions', () => {
@@ -27,8 +28,8 @@ test('rejects invalid timing and out-of-range positions', () => {
   assert.ok(validateChart(chart).length >= 5); assert.throws(() => readYaml('- one\n- two'));
 });
 test('path guards reject traversal, absolute paths and NTFS streams', () => {
-  const root = path.resolve('Map'); assert.equal(safePath(root, 'test/Ring/Easy.yaml'), path.join(root, 'test/Ring/Easy.yaml'));
-  for (const input of ['../README.md', 'x/../../README.md', 'x:stream', root]) assert.throws(() => safePath(root, input));
+  const root = path.resolve('Map'); assert.deepEqual(localPath('test/Ring/Easy.yaml'), ['test', 'Ring', 'Easy.yaml']);
+  for (const input of ['../README.md', 'x/../../README.md', 'x:stream', root]) assert.throws(() => localPath(input));
 });
 test('ring contains only the ten perimeter positions of the 4 x 3 source grid', () => {
   assert.equal(handPositions.length, 10);
@@ -65,7 +66,7 @@ test('3D ring rotation preserves radius and notes approach the judgment plane in
   assert.ok(full.back < full.front); assert.equal(held.front, 0); assert.ok(held.length < full.length);
 });
 test('catalog scans actual files despite stale metadata references', async () => {
-  const songs = await catalog(); assert.ok(songs.length >= 137); const legacy = songs.find(s => s.id === '3n3rgizer')!;
+  const songs = await new LocalWorkspace({ id: 'corpus', handle: new ReadDirectory(path.resolve('Map')) }).catalog(); assert.ok(songs.length >= 137); const legacy = songs.find(s => s.id === '3n3rgizer')!;
   assert.ok(legacy.charts.some(c => c.path === 'Ring/EasyRing.yaml')); assert.ok(legacy.warnings.length > 0);
 });
 test('every repository YAML round-trips semantically and all charts validate', { timeout: 600000 }, async () => {

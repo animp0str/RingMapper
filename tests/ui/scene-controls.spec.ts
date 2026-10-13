@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures';
 import { selectLastVisibleNote, frontCamera } from './helpers';
 
 async function fresh(page: Page) {
@@ -38,7 +38,7 @@ test('scene snap presets and custom beats drive placement without opening the ti
   await expect(page.locator('#preview')).toBeFocused(); await expect(page.locator('#division')).toHaveValue('custom');
   await page.locator('#home').click(); await page.keyboard.press('ArrowRight'); await expect(page.locator('#beat-input')).toHaveValue('0.200');
   await page.locator('#snap-denominator').fill('0'); await page.keyboard.press('Enter');
-  await expect(page.locator('#snap-denominator')).toHaveValue('5'); await expect(page.locator('#toast')).toContainText('正数');
+  await expect(page.locator('#snap-denominator')).toHaveValue('10'); await expect(page.locator('#toast')).toContainText('正数');
   await page.keyboard.press('ArrowRight'); await expect(page.locator('#beat-input')).toHaveValue('0.400');
 });
 
@@ -67,22 +67,22 @@ test('Alt wheel edits the hovered foot in snap steps, converts both ways and sup
 });
 
 test('depth and timeline share zoom; external continuous preview range extends the camera clipping plane', async ({ page }) => {
-  await fresh(page); await expect(page.locator('#depth-zoom')).toHaveValue('5');
-  expect(await page.locator('#preview').evaluate((el: HTMLCanvasElement) => el.spatialPreview!.depthScale)).toBe(5);
+  await fresh(page); await expect(page.locator('#depth-zoom')).toHaveValue('10');
+  expect(await page.locator('#preview').evaluate((el: HTMLCanvasElement) => el.spatialPreview!.depthScale)).toBe(10);
   await page.locator('#toggle-timeline').click();
   await expect(page.locator('#zoom, .timeline-hint, .preview-footer, .preview-events, #loop, #mirror-mode')).toHaveCount(0);
   await expect(page.locator('.mirror-controls button')).toHaveCount(3);
   await page.locator('#timeline-panel').evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
   const timeline = await page.locator('#timeline').boundingBox();
-  await page.mouse.click(timeline!.x + 86 + 240, timeline!.y + 15); await expect(page.locator('#beat-input')).toHaveValue('1.000');
+  await page.mouse.click(timeline!.x + 86 + 480, timeline!.y + 15); await expect(page.locator('#beat-input')).toHaveValue('1.000');
   await slider(page, 'depth-zoom', 10); await expect(page.locator('#depth-zoom-value')).toHaveText('10.00×');
   await page.mouse.click(timeline!.x + 86 + 480, timeline!.y + 15); await expect(page.locator('#beat-input')).toHaveValue('1.000');
   await page.mouse.move(timeline!.x + 200, timeline!.y + 50); await page.keyboard.down('Control'); await page.mouse.wheel(0, 100); await page.keyboard.up('Control');
   await expect.poll(async () => Number(await page.locator('#depth-zoom').inputValue())).toBe(10);
   await expect(page.locator('#division')).toHaveValue('3');
-  await slider(page, 'preview-range', 24.75); await expect(page.locator('#preview-range-value')).toHaveText('24.75 拍');
+  await slider(page, 'preview-range', 7.75); await expect(page.locator('#preview-range-value')).toHaveText('7.75 拍');
   const state = await page.locator('#preview').evaluate((el: HTMLCanvasElement) => ({ ahead: el.spatialPreview!.lookAhead, far: el.spatialPreview!.camera.far, spacing: el.spatialPreview!.beatSpacing }));
-  expect(state.ahead).toBe(24.75); expect(state.far).toBeGreaterThan(state.ahead * state.spacing);
+  expect(state.ahead).toBe(7.75); expect(state.far).toBeGreaterThan(state.ahead * state.spacing);
   const toggle = await page.locator('#toggle-timeline').boundingBox(), transport = await page.locator('.transport').boundingBox();
   expect(toggle!.y + toggle!.height).toBeLessThan(transport!.y);
   expect(toggle!.x + toggle!.width / 2).toBeCloseTo(transport!.x + transport!.width / 2, 0);

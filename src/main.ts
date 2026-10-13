@@ -1,5 +1,8 @@
 import './style.css';
 import JSZip from 'jszip';
+import { LocalWorkspace, stored, chooseWorkspace, directorySupported, type WorkspaceRecord, type Draft } from './workspace';
+let workspace: LocalWorkspace | undefined, recentWorkspace: WorkspaceRecord | undefined, workspaceReady = false;
+const libraryUrls = new Map<string, Promise<string>>();
 import { createIcons, AudioLines, Bell, ClipboardPaste, Copy, Download, Eraser, FolderInput, FolderOpen, Image, Keyboard, LocateFixed, MousePointer2, Music2, Orbit, Pause, Pencil, Play, Plus, Redo2, Save, ScanLine, Search, Settings2, SkipBack, SlidersHorizontal, Sparkles, Trash2, Undo2, Volume2, X } from 'lucide';
 const icons = { AudioLines, Bell, ClipboardPaste, Copy, Download, Eraser, FolderInput, FolderOpen, Image, Keyboard, LocateFixed, MousePointer2, Music2, Orbit, Pause, Pencil, Play, Plus, Redo2, Save, ScanLine, Search, Settings2, SkipBack, SlidersHorizontal, Sparkles, Trash2, Undo2, Volume2, X };
 import { History, beatToSeconds, secondsToBeat, snap, newItem, newProject, items, ensureItems, kinds, labels, decodeText, readYaml, writeYaml, sortedProject, validateChart, updateMetadata, type Project, type Song, type Kind, type Item } from './model';
@@ -16,11 +19,16 @@ import { fillEndpoints, fillPlans, nearestFillPlan, buildFill, maxFillNotes, typ
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const icon = (name: string) => `<i data-lucide="${name}"></i>`;
 const escape = (s: any) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-let viewDefaults = { depthScale: defaultDepthScale, previewRange: defaultPreviewRange };
+let viewDefaults = { depthScale: defaultDepthScale, previewRange: defaultPreviewRange, depthMin: 2, depthMax: 20, previewMin: 1, previewMax: 8 };
 try {
   const saved = JSON.parse(localStorage.getItem('ringmapper-view-defaults') || 'null');
-  if (typeof saved?.depthScale === 'number' && Number.isFinite(saved.depthScale) && saved.depthScale >= .25 && saved.depthScale <= 10) viewDefaults.depthScale = saved.depthScale;
-  if (typeof saved?.previewRange === 'number' && Number.isFinite(saved.previewRange) && saved.previewRange >= 1 && saved.previewRange <= 64) viewDefaults.previewRange = saved.previewRange;
+  for (const [min, max, value] of [['depthMin', 'depthMax', 'depthScale'], ['previewMin', 'previewMax', 'previewRange']] as const) {
+    if (Number.isFinite(saved?.[min]) && saved[min] > 0 && Number.isFinite(saved?.[max]) && saved[max] > saved[min]) {
+      viewDefaults[min] = saved[min]; viewDefaults[max] = saved[max];
+    }
+    if (Number.isFinite(saved?.[value]) && saved[value] >= viewDefaults[min] && saved[value] <= viewDefaults[max]) viewDefaults[value] = saved[value];
+    viewDefaults[value] = Math.max(viewDefaults[min], Math.min(viewDefaults[max], viewDefaults[value]));
+  }
 } catch {}
 let noteOpacity = { hand: 1, foot: 1, linked: true };
 try {
@@ -47,22 +55,55 @@ let localAssets = new Map<string, Blob>(), history = new History(), savedSignatu
 const audio = new Audio(); audio.preload = 'auto';
 const app = $('app');
 app.innerHTML = `
-<div class="workspace"><aside class="library"><div class="brand"><span class="brand-mark">◎</span><div>RingMapper<small>本地创作 · 谱面工作台</small></div></div><div class="section-label">WORKSPACE <button id="workspace-folder" title="在文件管理器中打开当前歌曲目录；未保存时打开 Map" aria-label="打开本地谱面路径">${icon('folder-open')}谱面目录</button></div><div class="library-actions"><button id="new-project">${icon('plus')}新建</button><button id="import">${icon('folder-input')}导入</button></div><div class="search-wrap">${icon('search')}<input id="search" placeholder="搜索歌曲 / 艺术家" aria-label="搜索歌曲"></div><div class="library-caption"><span>全部歌曲</span><span id="song-count">加载中</span></div><div id="song-list" class="song-list"></div><div class="library-bottom"><span class="status-dot"></span>本地工作区<span>Map /</span></div></aside>
+<div class="workspace"><aside class="library"><div class="brand"><span class="brand-mark">◎</span><div>RingMapper<small>本地创作 · 谱面工作台</small></div></div><div class="section-label">WORKSPACE <button id="workspace-folder" title="选择电脑中包含歌曲子目录的 Map 文件夹" aria-label="打开本地文件夹">${icon('folder-open')}打开本地文件夹</button></div><div class="workspace-access"><span id="workspace-name">尚未选择目录</span><button id="workspace-authorize" hidden>重新授权</button><button id="workspace-refresh" title="刷新本地曲库">刷新</button></div><div class="library-actions"><button id="new-project">${icon('plus')}新建</button><button id="import">${icon('folder-input')}导入</button></div><div class="search-wrap">${icon('search')}<input id="search" placeholder="搜索歌曲 / 艺术家" aria-label="搜索歌曲"></div><div class="library-caption"><span>全部歌曲</span><span id="song-count">加载中</span></div><div id="song-list" class="song-list"></div><div class="library-bottom"><span class="status-dot"></span>本地工作区<span>文件留在电脑</span></div></aside>
 <main id="scene-workspace"><section class="preview-panel" aria-label="3D 工作区">
 <div class="preview-viewport"><canvas id="preview" tabindex="0" aria-label="3D 圆环手部与下方脚部音符预览"></canvas></div>
 <button id="overlap-status" class="overlap-status" hidden aria-live="polite"></button><div class="scene-top"><div class="scene-song"><div class="song-details"><section class="songbar"><div class="song-cover" id="current-cover">◎</div><div class="song-info"><h1 id="song-name">未命名歌曲</h1><p id="artist-name">开始创作你的节奏</p></div><div class="song-meta"><span>BPM<strong id="bpm-display">120</strong></span><span>音符<strong id="note-count">0</strong></span></div><button id="settings" title="歌曲设置">${icon('settings-2')}</button></section>
 <div class="scene-status"><div class="project-title"><span class="status-dot"></span><span id="project-title">新建谱面</span><span class="badge" id="save-state">未保存</span></div></div></div><section class="difficulty-bar" aria-label="当前歌曲难度"><div class="difficulty-heading"><span>模式 · 难度</span></div><div id="difficulties"></div><span id="source-path">Ring/NormalRing.yaml</span></section></div><div class="header-actions"><button id="tutorial" title="新手教程" aria-label="新手教程"><b class="tutorial-question">?</b><span>新手教程</span></button><button id="help">${icon('keyboard')}<span>快捷键</span></button><button id="export">${icon('download')}<span>导出 ZIP</span></button><button id="save" class="primary">${icon('save')}<span>保存谱面</span></button></div></div>
-<div class="scene-camera"><span>${icon('orbit')}3D 空间预览</span><div><button id="camera-reset" title="重置相机">${icon('locate-fixed')}</button><button id="camera-near" title="拉近相机" aria-label="拉近相机">＋</button><button id="camera-far" title="拉远相机" aria-label="拉远相机">−</button><button id="view-settings" title="视图设置">${icon('sliders-horizontal')}<span>设置</span></button></div><div class="scene-snap"><label for="division">SNAP · 吸附</label><select id="division" aria-label="吸附预设">${[1,2,3,4,6,8,16,24,32].map(n => `<option value="${n}" ${n === 4 ? 'selected' : ''}>${n === 1 ? '1 beat' : `1/${n}`}</option>`).join('')}<option value="custom">自定义</option></select><label class="snap-custom">1 / <input id="snap-denominator" aria-label="自定义吸附分母" title="输入分母，例如 5 表示 1/5 拍" type="number" step="any" min="0.000001" max="1000000" value="4">拍</label></div><label class="scene-depth">纵深拉伸<input id="depth-zoom" aria-label="3D 纵深拉伸" type="range" min="0.25" max="10" step="any" value="${viewDefaults.depthScale}"><output id="depth-zoom-value">${viewDefaults.depthScale.toFixed(2)}×</output></label><label class="scene-depth">预览范围<input id="preview-range" aria-label="预览范围（拍）" type="range" min="1" max="64" step="any" value="${viewDefaults.previewRange}"><output id="preview-range-value">${viewDefaults.previewRange.toFixed(2)} 拍</output></label></div>
+<div class="scene-camera"><span>${icon('orbit')}3D 空间预览</span><div><button id="camera-reset" title="重置相机">${icon('locate-fixed')}</button><button id="camera-near" title="拉近相机" aria-label="拉近相机">＋</button><button id="camera-far" title="拉远相机" aria-label="拉远相机">−</button><button id="view-settings" title="视图设置">${icon('sliders-horizontal')}<span>设置</span></button></div><div class="scene-snap"><label for="division">SNAP · 吸附</label><select id="division" aria-label="吸附预设">${[1,2,3,4,6,8,16,24,32].map(n => `<option value="${n}" ${n === 4 ? 'selected' : ''}>${n === 1 ? '1 beat' : `1/${n}`}</option>`).join('')}<option value="custom">自定义</option></select><label class="snap-custom">1 / <input id="snap-denominator" aria-label="自定义吸附分母" title="输入分母，例如 5 表示 1/5 拍" type="number" step="any" min="0.000001" max="1000000" value="4">拍</label></div><label class="scene-depth">纵深拉伸<input id="depth-zoom" aria-label="3D 纵深拉伸" type="range" min="${viewDefaults.depthMin}" max="${viewDefaults.depthMax}" step="any" value="${viewDefaults.depthScale}"><output id="depth-zoom-value">${viewDefaults.depthScale.toFixed(2)}×</output></label><label class="scene-depth">预览范围<input id="preview-range" aria-label="预览范围（拍）" type="range" min="${viewDefaults.previewMin}" max="${viewDefaults.previewMax}" step="any" value="${viewDefaults.previewRange}"><output id="preview-range-value">${viewDefaults.previewRange.toFixed(2)} 拍</output></label></div>
 <section class="inspector-panel" id="tools-panel" aria-label="编辑工具子窗口"><div class="panel-heading" id="tools-handle" title="拖动移动工具窗口，双击复位"><span>${icon('mouse-pointer-2')}编辑工具</span><div><span class="subtle" id="selection-count">未选中</span><button id="toggle-tools" aria-label="收起编辑工具" aria-controls="tools-body" aria-expanded="true">−</button></div></div><div id="tools-body"><div class="kind-tabs"><button data-mode="notes" class="active" title="音符（1）">音符</button><button data-mode="obstacles" title="障碍物（2）">障碍物</button><button data-mode="events" title="灯光（3）">灯光事件</button></div><div id="inspector"></div><div class="mirror-controls"><button id="mirror-left-right" title="左右镜像，保留颜色（Ctrl+F）">${mirrorArt('left-right')}<span>左右镜像</span></button><button id="mirror-up-down" title="沿水平轴翻转上下两半">${mirrorArt('up-down')}<span>上下镜像</span></button><button id="mirror-diagonal" title="上下、左右同时翻转，保留颜色">${mirrorArt('diagonal')}<span>对角镜像</span></button></div><div class="edit-actions"><button id="undo" title="撤销 Ctrl+Z">${icon('undo-2')}</button><button id="redo" title="重做 Ctrl+Y">${icon('redo-2')}</button><button id="copy" title="复制 Ctrl+C">${icon('copy')}</button><button id="paste" title="粘贴 Ctrl+V">${icon('clipboard-paste')}</button><button id="delete" title="删除选中项（Del）" aria-label="删除选中项（Del）">${icon('trash-2')}<span>Del</span></button></div><div class="inspector-bottom"><button id="range-select">范围选取</button><button id="group">打组</button><button id="fill" hidden title="沿圆环填充两个手部音符之间的空位">填充</button><button id="join-group" hidden>加入组</button><button id="check">${icon('scan-line')}检查谱面</button></div></div></section>
 <section id="fill-panel" class="fill-panel" aria-label="圆环填充" hidden></section>
 <section class="timeline-panel is-collapsed" id="timeline-panel" aria-label="时间轴子窗口" inert><div class="timeline-toolbar"><div class="timeline-title">${icon('audio-lines')}时间轴 <span class="badge" id="visible-range">BEATS</span></div><div class="timeline-options"><button id="hide-timeline" title="向下收起时间轴">向下收起 ↓</button><button id="follow" title="定位到播放头">${icon('locate-fixed')}</button></div></div><div class="timeline-wrap"><canvas id="timeline" aria-label="谱面时间轴"></canvas></div><input id="scroll" class="timeline-scroll" type="range" min="0" max="256" step="0.25" value="0" aria-label="滚动时间轴"></section>
 
 <button class="timeline-toggle" id="toggle-timeline" aria-controls="timeline-panel" aria-expanded="false" title="展开传统时间轴">${icon('audio-lines')}<span>传统时间轴 ↑</span></button><footer class="transport"><div class="transport-buttons"><button id="home" title="回到开始">${icon('skip-back')}</button><button id="play" class="play-button" title="播放 / 暂停 Space">${icon('play')}</button></div><div class="transport-time"><strong id="time-display">00:00.000</strong><span>BEAT <input id="beat-input" type="number" min="0" step="0.25" value="0" aria-label="当前节拍"></span></div><div class="seek-wrap"><div id="seek-bookmarks" class="seek-bookmarks" aria-label="歌曲书签"></div><input id="seek" type="range" min="0" max="256" step="0.01" value="0" aria-label="播放进度"></div><div class="speed-control"><label class="speed-label" title="歌曲播放速度">倍速<input id="speed" aria-label="播放速度" type="range" min="0.1" max="2" step="any" value="1"><output id="speed-value">1.00×</output></label><button id="speed-reset" hidden title="恢复默认播放速度" aria-label="恢复默认播放速度">↺ 1×</button></div><div class="metronome-control"><button id="metronome" title="节拍器开关" aria-label="节拍器开关" aria-pressed="false">${icon('bell')}</button><input id="metronome-volume" aria-label="节拍器音量" title="节拍器音量" type="range" min="0" max="1" step="any" value="0.5"></div><label class="volume-label">${icon('volume-2')}<input id="volume" type="range" min="0" max="1" step="0.05" value="0.7" aria-label="音量"></label></footer>
-<div id="toast" role="status"></div><dialog id="modal"><div id="modal-content"></div></dialog><input id="import-input" type="file" accept=".zip,.yaml,.yml" multiple hidden><input id="audio-input" type="file" accept="audio/ogg,audio/mpeg,audio/wav" hidden><input id="cover-input" type="file" accept="image/png,image/jpeg,image/webp" hidden></section></main></div>`;
+<div id="toast" role="status"></div><dialog id="modal"><div id="modal-content"></div></dialog><input id="import-input" type="file" accept=".zip,.yaml,.yml" multiple hidden><input id="audio-input" type="file" accept="audio/ogg,audio/mpeg,audio/wav,.zip" hidden><input id="cover-input" type="file" accept="image/png,image/jpeg,image/webp" hidden></section></main></div>`;
 function iconsRefresh() { createIcons({ icons }); }
 function notify(message: string) { $('toast').textContent = message; $('toast').classList.add('show'); setTimeout(() => $('toast').classList.remove('show'), 4500); }
-async function api<T>(url: string, options?: RequestInit): Promise<T> { const r = await fetch(url, options); const data = await r.json(); if (!r.ok) throw new Error(data.error || r.statusText); return data; }
-function asset(song: string, file: string) { return `/api/asset?song=${encodeURIComponent(song)}&file=${encodeURIComponent(file)}`; }
+function resetLibraryUrls() { for (const url of libraryUrls.values()) void url.then(u => { if (u) URL.revokeObjectURL(u); }); libraryUrls.clear(); }
+async function asset(song: string, file: string) {
+  const ws = workspace; if (!ws || !workspaceReady) return '';
+  const key = `${ws.id}/${song}/${file}`;
+  if (!libraryUrls.has(key)) libraryUrls.set(key, ws.asset(song, file).then(blob => blob ? URL.createObjectURL(blob) : '').catch(() => ''));
+  return libraryUrls.get(key)!;
+}
+function workspaceStatus() {
+  $('workspace-name').textContent = recentWorkspace ? recentWorkspace.handle.name : '尚未选择目录';
+  $('workspace-authorize').hidden = !recentWorkspace || workspaceReady;
+  $('workspace-folder').title = workspaceReady ? '重新选择本地 Map 文件夹' : '选择电脑中包含歌曲子目录的 Map 文件夹';
+  $<HTMLButtonElement>('workspace-refresh').disabled = !workspaceReady;
+}
+async function refreshWorkspace() {
+  if (!workspace || !workspaceReady) return;
+  try { const ws = workspace, list = await ws.catalog(); if (ws !== workspace) return; songs = list; resetLibraryUrls(); renderLibrary(); notify('本地曲库已刷新；当前编辑内容保留'); }
+  catch (e: any) { notify('目录访问失败：' + e.message); }
+}
+async function authorizeWorkspace() {
+  if (!recentWorkspace) return;
+  try {
+    const ws = new LocalWorkspace(recentWorkspace);
+    if (!await ws.permitted('read', true)) { notify('未获得读取权限，仍可新建或导入 ZIP'); return; }
+    workspace = ws; workspaceReady = true; songs = await ws.catalog(); workspaceStatus(); renderLibrary();
+    if (project.workspaceId === ws.id && project.songId) { activeSong = songs.find(s => s.id === project.songId); await loadProjectMedia(); renderSummary(); }
+    else if (!dirty && !project.songId && songs.length) await openSong(songs[0]);
+  } catch (e: any) { notify('目录访问失败：' + e.message); }
+}
+async function loadProjectMedia() {
+  const ws = workspace, p = project;
+  const media = async (name: string) => localAssets.get(name) ?? (ws && workspaceReady && p.workspaceId === ws.id && p.songId && name ? await ws.asset(p.songId, name) : undefined);
+  const [sound, cover] = await Promise.all([media(p.info.songFilename), media(p.info.coverImageFilename)]);
+  if (project !== p) return;
+  setCover(cover || undefined); void loadAudio(sound ? URL.createObjectURL(sound) : '');
+}
 function view(): ViewState { return { project, beat, start, scale, division, selected: selected[0], selections: selected, active, mode, overlaps, ringRotation, ringReverse }; }
 const preview = $<HTMLCanvasElement>('preview'), timeline = $<HTMLCanvasElement>('timeline');
 let spatialPreview: SpatialPreview | undefined;
@@ -74,9 +115,9 @@ function totalBeats() { return Math.max(16, secondsToBeat(Number(project.info.so
 function changed() {
   if (!applyingFill) closeFill();
   diagnosticsDirty = true;
-  dirty = JSON.stringify(project) !== savedSignature;
+  dirty = JSON.stringify(project) !== savedSignature || localAssets.size > 0;
   $('save-state').textContent = dirty ? '有未保存修改' : '已保存'; $('save-state').classList.toggle('unsaved', dirty);
-  clearTimeout(draftTimer); draftTimer = setTimeout(() => { try { localStorage.setItem('ringmapper-draft', JSON.stringify({ project, date: Date.now() })); } catch { notify('浏览器草稿空间不足，请保存到本地'); } }, 600);
+  clearTimeout(draftTimer); draftTimer = setTimeout(() => { try { void stored<Draft | null>('draft', dirty ? { project: structuredClone(project), assets: new Map(localAssets), date: Date.now() } : null).catch(() => notify('浏览器草稿空间不足，请保存或导出 ZIP')); } catch { notify('浏览器草稿空间不足，请保存到本地'); } }, 600);
   renderSummary(); draw();
 }
 function mutate(fn: () => void) { history.push(project); fn(); changed(); renderInspector(); }
@@ -100,7 +141,8 @@ function renderLibrary() {
   const query = $<HTMLInputElement>('search').value.toLocaleLowerCase();
   const visible = songs.filter(s => `${s.name} ${s.artist} ${s.id}`.toLowerCase().includes(query));
   $('song-count').textContent = `${visible.length} 首`;
-  $('song-list').innerHTML = visible.map(s => `<button class="song-card ${s.id === activeSong?.id ? 'active' : ''}" data-song="${escape(s.id)}"><div class="thumb">${s.cover ? `<img draggable="false" loading="lazy" src="${asset(s.id, s.cover)}" alt="">` : '◎'}</div><div class="song-card-info"><strong>${escape(s.name)}</strong><span>${escape(s.artist)}</span><small>${s.bpm} BPM <i>·</i> ${s.charts.length} 张谱面</small></div>${s.id === activeSong?.id ? '<span class="song-active-dot"></span>' : ''}</button>`).join('') || '<div class="empty-library">没有找到歌曲</div>';
+  $('song-list').innerHTML = visible.map(s => `<button class="song-card ${s.id === activeSong?.id ? 'active' : ''}" data-song="${escape(s.id)}"><div class="thumb">${s.cover ? `<img draggable="false" loading="lazy" data-local-cover="${escape(s.id)}" alt="">` : '◎'}</div><div class="song-card-info"><strong>${escape(s.name)}</strong><span>${escape(s.artist)}</span><small>${s.bpm} BPM <i>·</i> ${s.charts.length} 张谱面</small></div>${s.id === activeSong?.id ? '<span class="song-active-dot"></span>' : ''}</button>`).join('') || `<div class="empty-library">${workspaceReady ? '没有找到歌曲；可新建或导入 ZIP' : '打开本地 Map 文件夹开始编辑<br>也可新建歌曲或导入 ZIP<br><small>歌曲与谱面只在你的电脑中处理</small>'}</div>`;
+  for (const img of document.querySelectorAll<HTMLImageElement>('[data-local-cover]')) { const song = songs.find(s => s.id === img.dataset.localCover)!; void asset(song.id, song.cover).then(url => { if (img.isConnected && url) img.src = url; }); }
 }
 const fields: Record<Kind, string[]> = { notes: ['time', 'lineIndex', 'lineLayer', 'type', 'cutDirection', 'groupId', 'groupNoteType', 'specialType'], ringNotes: ['time', 'lineIndex', 'type', 'ringNoteType', 'duration'], obstacles: ['time', 'lineIndex', 'type', 'style'], events: ['time', 'type', 'value'] };
 const fieldNames: Record<string, string> = { time: '节拍', lineIndex: '位置编号', lineLayer: '层级', type: '类型 / 颜色', cutDirection: '击打方向', ringNoteType: '脚部音符类型', duration: '持续拍数', width: '宽度', value: '事件值', groupId: '分组 ID', groupNoteType: '分组标记', specialType: '特殊类型', style: '样式' };
@@ -190,7 +232,8 @@ async function loadAudio(url: string) {
   } catch { if (token === waveToken) notify('无法生成音频波形，仍可继续编辑谱面'); }
 }
 function modal(title: string, html: string) { $('modal').classList.remove('tutorial-dialog'); $('modal-content').innerHTML = `<div class="modal-heading"><h2>${title}</h2><button id="close-modal">${icon('x')}</button></div>${html}`; if (!$<HTMLDialogElement>('modal').open) $<HTMLDialogElement>('modal').showModal(); iconsRefresh(); }
-function showTutorial(index = 0) { modal('新手教程', tutorialHtml(Math.max(0, Math.min(tutorialSteps.length - 1, index)))); $('modal').classList.add('tutorial-dialog'); }
+try { $('tutorial').classList.toggle('tutorial-unseen', localStorage.getItem('ringmapper-tutorial-seen') !== 'true'); } catch { $('tutorial').classList.add('tutorial-unseen'); }
+function showTutorial(index = 0) { $('tutorial').classList.remove('tutorial-unseen'); try { localStorage.setItem('ringmapper-tutorial-seen', 'true'); } catch {} modal('新手教程', tutorialHtml(Math.max(0, Math.min(tutorialSteps.length - 1, index)))); $('modal').classList.add('tutorial-dialog'); }
 function confirmDiscard(action: () => void) {
   if (!dirty) { action(); return; }
   modal('离开当前谱面？', '<p>当前修改尚未保存。请先保存，或选择放弃修改后继续。</p><div class="modal-actions"><button id="discard" class="danger">放弃修改并继续</button><button id="cancel-modal">继续编辑</button></div>');
@@ -201,12 +244,13 @@ async function openSong(song: Song, chartPath?: string) {
   try {
     const entry = chartPath ? song.charts.find(c => c.path === chartPath) : song.charts.find(c => c.difficulty === 'Normal') ?? song.charts[0];
     if (!entry) { notify('此歌曲没有谱面文件，可新建谱面并导入该歌曲音频'); return; }
-    const p = await api<Project>(`/api/project?song=${encodeURIComponent(song.id)}&chart=${encodeURIComponent(entry.path)}`);
+    if (!workspace || !workspaceReady) throw new Error('请先打开本地文件夹');
+    const p = await workspace.open(song, entry);
     if (loadId !== loadingProject) return;
     activeSong = song; localAssets.clear(); project = p; history.clear(); selected = []; beat = 0; start = 0; dirty = false; savedSignature = JSON.stringify(project);
-    $('current-cover').innerHTML = song.cover ? `<img draggable="false" src="${asset(song.id, song.cover)}" alt="歌曲封面">` : '◎';
+    clearTimeout(draftTimer); void stored('draft', null).catch(() => {}); localStorage.removeItem('ringmapper-draft'); setCover();
     $('save-state').textContent = '已保存'; $('save-state').classList.remove('unsaved'); renderSummary(); renderLibrary(); renderInspector(); updateTransport(); draw();
-    void loadAudio(song.audio ? asset(song.id, song.audio) : '');
+    await loadProjectMedia();
     if (song.warnings.length) notify(`已按实际文件加载；发现 ${song.warnings.length} 个旧元数据路径引用`);
   } catch (e: any) { notify(e.message); }
 }
@@ -317,36 +361,39 @@ function mappingDialog() {
   };
 }
 async function saveProject(songId = project.songId) {
+  if (!workspace || !workspaceReady) { modal('保存本地谱面', '<p>先打开并授权本地 Map 文件夹即可直接保存。也可导出 ZIP，在电脑上解压使用。</p><div class="modal-actions"><button id="save-pick-folder">打开本地文件夹</button><button id="save-export" class="primary">导出 ZIP</button></div>'); $('save-pick-folder').onclick = () => { $<HTMLDialogElement>('modal').close(); void openWorkspaceFolder(true); }; $('save-export').onclick = () => { $<HTMLDialogElement>('modal').close(); void exportProject(); }; return; }
+  if (project.workspaceId && project.workspaceId !== workspace.id) { notify('此草稿属于另一个工作区，请重新打开原目录，或导出 ZIP 后重新导入'); return; }
   if (saving) return;
-  if (!songId) { modal('保存到本地曲库', '<p>输入新歌曲目录名，谱面将写入项目的 Map 目录。音频、封面及其他难度会一同保存。</p><label class="full-field">目录名<input id="new-song-id" value="my-song"></label><div class="modal-actions"><button id="confirm-save" class="primary">保存</button></div>'); $('confirm-save').onclick = () => { const id = $<HTMLInputElement>('new-song-id').value.trim(); $<HTMLDialogElement>('modal').close(); void saveProject(id); }; return; }
+  if (!songId) { modal('保存到本地曲库', '<p>输入新歌曲目录名，谱面将写入你选择的 Map 目录。音频、封面及其他难度会一同保存。</p><label class="full-field">目录名<input id="new-song-id" value="my-song"></label><div class="modal-actions"><button id="confirm-save" class="primary">保存</button></div>'); $('confirm-save').onclick = () => { const id = $<HTMLInputElement>('new-song-id').value.trim(); $<HTMLDialogElement>('modal').close(); void saveProject(id); }; return; }
   try {
     saving = true; $<HTMLButtonElement>('save').disabled = true;
-    const original = structuredClone(project); const p = sortedProject(project); p.songId = songId;
-    const assets: Record<string, string> = {};
-    for (const [name, blob] of localAssets) assets[name] = await blobBase64(blob);
-    const result = await api<{ revision: string; backup: string; info: any }>('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...p, assets }) });
-    const sameContext = project.songId === original.songId && project.chartPath === original.chartPath;
+    const editingProject = project, original = structuredClone(project); const p = sortedProject(project); p.songId = songId;
+    const ws = workspace, assetsSnapshot = new Map(localAssets); const result = await ws.save(p, assetsSnapshot);
+    const sameContext = project === editingProject && workspace === ws && project.songId === original.songId && project.chartPath === original.chartPath;
     if (sameContext) {
-      const unchanged = JSON.stringify(project) === JSON.stringify(original);
-      project.songId = songId; project.revision = result.revision;
+      const unchanged = JSON.stringify(project) === JSON.stringify(original) && localAssets.size === assetsSnapshot.size && [...localAssets].every(([name, blob]) => assetsSnapshot.get(name) === blob);
+      project.songId = songId; project.workspaceId = ws.id; project.revision = result.revision;
       if (unchanged) project.info = result.info; else updateMetadata(project);
-      original.songId = songId; original.revision = result.revision; original.info = result.info; savedSignature = JSON.stringify(original);
+      original.songId = songId; original.workspaceId = ws.id; original.revision = result.revision; original.info = result.info; savedSignature = JSON.stringify(original);
       if (unchanged) localAssets.clear(); changed();
     }
-    songs = await api<Song[]>('/api/catalog'); if (sameContext) activeSong = songs.find(s => s.id === songId); renderLibrary(); renderSummary(); notify(result.backup ? '谱面已保存，原文件已自动备份' : '谱面已保存到 Map/' + songId);
+    songs = await ws.catalog(); resetLibraryUrls(); if (sameContext) activeSong = songs.find(s => s.id === songId); renderLibrary(); renderSummary(); notify(result.backup ? '谱面已保存，原文件已自动备份' : '谱面已保存到 Map/' + songId);
   } catch (e: any) { notify('保存失败：' + e.message); }
   finally { saving = false; $<HTMLButtonElement>('save').disabled = false; }
 }
 function download(blob: Blob, name: string) { const url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 10000); }
-async function exportProject() {
+async function exportProject(partial = false) {
   try {
     const p = sortedProject(project), errors = validateChart(p.chart, p.event); if (errors.length) throw new Error(errors[0]); updateMetadata(p);
-    let zip: JSZip;
-    if (project.songId) { const r = await fetch('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }); if (!r.ok) throw new Error((await r.json()).error); zip = await JSZip.loadAsync(await r.arrayBuffer()); }
-    else { zip = new JSZip(); zip.file('Info.yaml', writeYaml(p.info)); zip.file(p.chartPath, writeYaml(p.chart)); zip.file(p.eventPath, writeYaml(p.event)); }
+    const attached = project.songId && workspaceReady && workspace && project.workspaceId === workspace.id;
+    if (project.songId && !attached && !partial) {
+      modal('原曲库尚未授权', '<p>当前只能导出已恢复的谱面和草稿资源，未授权目录中的音频、封面及其他难度不会包含在内。打开原目录可导出完整曲包。</p><div class="modal-actions"><button id="partial-export">仅导出恢复内容</button><button id="cancel-modal">返回编辑</button></div>');
+      $('partial-export').onclick = () => { $<HTMLDialogElement>('modal').close(); void exportProject(true); }; return;
+    }
+    const zip = attached ? await workspace!.export(p, localAssets) : new JSZip();
     for (const [name, blob] of localAssets) zip.file(name, blob);
     zip.file('Info.yaml', writeYaml(p.info)); zip.file(p.chartPath, writeYaml(p.chart)); zip.file(p.eventPath, writeYaml(p.event));
-    download(await zip.generateAsync({ type: 'blob' }), `${p.info.songName || 'RingMapper'}.zip`); notify('ZIP 已导出，包含音频、封面及已有难度');
+    download(await zip.generateAsync({ type: 'blob' }), `${p.info.songName || 'RingMapper'}.zip`); notify(partial ? '已导出恢复内容；未授权目录中的资源未包含' : 'ZIP 已导出，包含已加载的谱面与资源');
   } catch (e: any) { notify('导出失败：' + e.message); }
 }
 function settings() {
@@ -354,7 +401,7 @@ function settings() {
   const names = ['歌曲名称', '艺术家', '谱师', 'BPM', '音频偏移（秒）', '歌曲时长（秒）'];
   const sets = [...(project.info.difficultyCiphermapSets ?? []), ...(project.info.difficultyBeatmapSets ?? [])];
   const entry = sets.flatMap((s: any) => s.difficultyCiphermaps ?? s.difficultyBeatmaps ?? []).find((e: any) => (e.ciphermapFilename ?? e.beatmapFilename) === project.chartPath) ?? {};
-  modal('歌曲与难度设置', `<div class="field-grid settings-grid">${values.map((key, i) => `<label>${names[i]}<input data-info="${key}" type="${i > 2 ? 'number' : 'text'}" step="any" value="${escape(project.info[key])}"></label>`).join('')}${['noteJumpMovementSpeed', 'noteJumpStartBeatOffset', 'ringNoteJumpMovementSpeed', 'ringNoteJumpStartBeatOffset'].map((key, i) => `<label>${['手部跳跃速度', '手部出生拍偏移', '脚部跳跃速度', '脚部出生拍偏移'][i]}<input data-difficulty-field="${key}" type="number" step="any" value="${escape(entry[key] ?? (i % 2 ? 2 : 10))}"></label>`).join('')}</div><p class="field-help">偏移约定：音频秒数 = 节拍 × 60 / BPM + 偏移。需试听校准。推荐 OGG 音频与 512 × 512 PNG 封面。</p><div class="modal-actions"><button id="choose-audio">${icon('music-2')}导入音频</button><button id="choose-cover">${icon('image')}导入封面</button><button id="tap-tempo">点击测 BPM</button><button id="apply-settings" class="primary">应用设置</button></div>`);
+  modal('歌曲与难度设置', `<div class="field-grid settings-grid">${values.map((key, i) => `<label>${names[i]}<input data-info="${key}" type="${i > 2 ? 'number' : 'text'}" step="any" value="${escape(project.info[key])}"></label>`).join('')}${['noteJumpMovementSpeed', 'noteJumpStartBeatOffset', 'ringNoteJumpMovementSpeed', 'ringNoteJumpStartBeatOffset'].map((key, i) => `<label>${['手部跳跃速度', '手部出生拍偏移', '脚部跳跃速度', '脚部出生拍偏移'][i]}<input data-difficulty-field="${key}" type="number" step="any" value="${escape(entry[key] ?? (i % 2 ? 2 : 10))}"></label>`).join('')}</div><p class="field-help">偏移约定：音频秒数 = 节拍 × 60 / BPM + 偏移。需试听校准。推荐 OGG 音频与 512 × 512 PNG 封面。</p><div class="modal-actions"><button id="choose-audio">${icon('music-2')}导入音频 / ZIP</button><button id="choose-cover">${icon('image')}导入封面</button><button id="tap-tempo">点击测 BPM</button><button id="apply-settings" class="primary">应用设置</button></div>`);
   $('choose-audio').onclick = () => $<HTMLInputElement>('audio-input').click(); $('choose-cover').onclick = () => $<HTMLInputElement>('cover-input').click();
   const taps: number[] = []; $('tap-tempo').onclick = () => { if (!playing) void togglePlay(); if (taps.length && performance.now() - taps.at(-1)! > 2500) taps.length = 0; taps.push(performance.now()); if (taps.length > 8) taps.shift(); if (taps.length > 1) { const bpm = Math.round(60000 * (taps.length - 1) / (taps.at(-1)! - taps[0])); (document.querySelector('[data-info="beatsPerMinute"]') as HTMLInputElement).value = String(bpm); $('tap-tempo').textContent = `${bpm} BPM · 继续点击`; } };
   $('apply-settings').onclick = () => {
@@ -377,8 +424,21 @@ function rangeDialog() {
   $('range-apply').onclick = () => { if (!apply()) return; $<HTMLDialogElement>('modal').close(); select(selected); };
   $('range-delete').onclick = () => { if (!apply()) return; $<HTMLDialogElement>('modal').close(); removeSelected(); };
 }
-async function openWorkspaceFolder() {
-  try { await api('/api/open-folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ song: project.songId || '' }) }); notify('已在文件管理器中打开谱面目录'); } catch (e: any) { notify('打开目录失败：' + e.message); }
+async function openWorkspaceFolder(preserve = false) {
+  if (saving) { notify('请等待保存完成后切换目录'); return; }
+  if (!directorySupported()) { notify('此浏览器不支持直接读写文件夹，请使用桌面 Chrome / Edge，或导入和导出 ZIP'); return; }
+  try {
+    const keepEditor = dirty && (!project.songId || preserve);
+    const next = await chooseWorkspace(recentWorkspace), ws = new LocalWorkspace(next);
+    const list = await ws.catalog();
+    workspace = ws; recentWorkspace = next; workspaceReady = true; songs = list; activeSong = undefined;
+    ++loadingProject; resetLibraryUrls();
+    try { await stored('workspace', next); } catch { notify('目录已打开，但浏览器无法记住授权；下次请重新选择'); }
+    workspaceStatus(); renderLibrary();
+    if (project.workspaceId === ws.id && project.songId) { activeSong = songs.find(s => s.id === project.songId); await loadProjectMedia(); renderSummary(); }
+    else if (!keepEditor && songs.length) await openSong(songs.find(s => s.id === 'caocao') ?? songs[0]);
+    else if (!keepEditor) { project = newProject(); localAssets.clear(); selected = []; history.clear(); savedSignature = JSON.stringify(project); dirty = false; void loadAudio(''); setCover(); renderSummary(); renderInspector(); draw(); }
+  } catch (e: any) { if (e.name !== 'AbortError') notify('打开目录失败：' + e.message); }
 }
 function addDifficulty(initialMode = 'Ring', initialDifficulty = 'Hard') {
   modal('添加难度', `<div class="field-grid"><label>模式<select id="new-mode"><option>Ring</option><option>RingDance</option></select></label><label>难度<select id="new-difficulty"><option>Easy</option><option>Normal</option><option selected>Hard</option><option>Expert</option><option>ExpertPlus</option></select></label></div><label class="checkbox"><input id="clone-chart" type="checkbox">复制当前音符与障碍物</label><label class="checkbox"><input id="clone-events" type="checkbox" checked>复制当前灯光事件</label><div class="modal-actions"><button id="difficulty-create" class="primary">创建难度</button></div>`);
@@ -394,24 +454,28 @@ function addDifficulty(initialMode = 'Ring', initialDifficulty = 'Hard') {
       if (!clone) project.chart = { version: '2.3.0', notes: [], ringNotes: [], obstacles: [], customData: { bookmarks: [] } };
       if (!cloneEvents) project.event = { version: '2.3.0', events: [] }; selected = []; updateMetadata(project);
     });
-    // New targets require a fresh revision including missing files, obtained without changing source files.
-    if (project.songId) { try { project.revision = (await api<{ revision: string }>(`/api/revision?song=${encodeURIComponent(project.songId)}&chart=${encodeURIComponent(project.chartPath)}&event=${encodeURIComponent(project.eventPath)}`)).revision; } catch (e: any) { notify(e.message); } }
+    // Keep the original workspace snapshot: newly appeared files must conflict at save time.
     $<HTMLDialogElement>('modal').close(); renderSummary(); notify('已创建新难度，保存后写入歌曲目录');
   };
 }
 async function importFiles(files: File[]) {
   try {
     let p = newProject(); const assets = new Map<string, Blob>();
-    if (files[0]?.name.endsWith('.zip')) {
+    if (/\.zip$/i.test(files[0]?.name ?? '')) {
       const zip = await JSZip.loadAsync(files[0]); const names = Object.keys(zip.files).filter(n => !zip.files[n].dir);
       if (names.length > 3000) throw new Error('ZIP 文件数量过多');
       const infoName = names.find(n => /(^|\/)Info\.yaml$/i.test(n)); if (!infoName) throw new Error('ZIP 中缺少 Info.yaml');
       const prefix = infoName.slice(0, -'Info.yaml'.length); let bytes = 0;
       for (const name of names.filter(n => n.startsWith(prefix))) { const relative = name.slice(prefix.length); if (!relative || relative.includes('..') || relative.startsWith('/') || relative.includes(':')) continue; const blob = await zip.files[name].async('blob'); bytes += blob.size; if (bytes > 200_000_000) throw new Error('解压内容超过 200MB'); assets.set(relative, blob); }
+      if (infoName.slice(prefix.length) !== 'Info.yaml') { assets.set('Info.yaml', assets.get(infoName.slice(prefix.length))!); assets.delete(infoName.slice(prefix.length)); }
       p.info = readYaml(await blobText(assets.get('Info.yaml')!));
-      const charts = [...assets.keys()].filter(n => /\.yaml$/i.test(n) && n !== 'Info.yaml' && !/Event\.yaml$/i.test(n));
+      const entries = [...(p.info.difficultyCiphermapSets ?? []), ...(p.info.difficultyBeatmapSets ?? [])].flatMap((set: any) => set.difficultyCiphermaps ?? set.difficultyBeatmaps ?? []);
+      const events = new Set(entries.map((entry: any) => String(entry.eventmapFilename ?? '').replaceAll('\\', '/')));
+      const charts = [...assets.keys()].filter(n => /\.yaml$/i.test(n) && n !== 'Info.yaml' && !events.has(n) && !/Event\.yaml$/i.test(n));
       if (!charts.length) throw new Error('ZIP 中没有谱面文件');
-      p.chartPath = charts.find(n => /Normal/.test(n)) ?? charts[0]; p.eventPath = p.chartPath.replace('.yaml', 'Event.yaml');
+      p.chartPath = charts.find(n => /Normal/.test(n)) ?? charts[0];
+      const entry = entries.find((entry: any) => String(entry.ciphermapFilename ?? entry.beatmapFilename ?? '').replaceAll('\\', '/') === p.chartPath);
+      p.eventPath = String(entry?.eventmapFilename ?? p.chartPath.replace('.yaml', 'Event.yaml')).replaceAll('\\', '/');
       p.chart = readYaml(await blobText(assets.get(p.chartPath)!)); p.event = assets.has(p.eventPath) ? readYaml(await blobText(assets.get(p.eventPath)!)) : { version: p.chart.version, events: [] };
     } else {
       const chartFile = files.find(f => !/Event\.ya?ml$/i.test(f.name) && f.name !== 'Info.yaml'); if (!chartFile) throw new Error('请选择音符 YAML，可同时选择 Info.yaml 与 Event.yaml');
@@ -421,7 +485,7 @@ async function importFiles(files: File[]) {
     }
     const errors = validateChart(p.chart, p.event); if (errors.length) throw new Error(errors.slice(0, 3).join('；'));
     if (!(Number(p.info.beatsPerMinute) > 0)) throw new Error('Info.yaml 的 BPM 必须大于 0');
-    project = p; activeSong = undefined; localAssets = assets; selected = []; history.clear(); beat = start = 0; savedSignature = ''; changed(); renderLibrary(); renderInspector();
+    ++loadingProject; project = p; activeSong = undefined; localAssets = assets; selected = []; history.clear(); beat = start = 0; savedSignature = ''; changed(); renderLibrary(); renderInspector();
     const audioBlob = assets.get(p.info.songFilename); void loadAudio(audioBlob ? URL.createObjectURL(audioBlob) : '');
     const cover = assets.get(p.info.coverImageFilename); setCover(cover); notify('谱面导入成功，全部难度与原始字段已保留');
   } catch (e: any) { notify('导入失败：' + e.message); }
@@ -437,13 +501,14 @@ const actions: Record<string, () => void> = {
   save: () => void saveProject(), export: () => void exportProject(), settings, check: checkChart, 'range-select': rangeDialog,
   group: () => groupNotes(), 'join-group': () => groupNotes('join'), 'light-focus': () => spatialPreview?.focusLighting(), 'light-mapping': mappingDialog, 'speed-reset': () => setPlaybackRate(1), copy, paste, 'mirror-left-right': () => mirror('left-right'), 'mirror-up-down': () => mirror('up-down'), 'mirror-diagonal': () => mirror('diagonal'), delete: removeSelected, undo: () => undo(), redo: () => undo(true),
   play: () => void togglePlay(), home: () => { stop(); setBeat(0); start = 0; draw(); }, follow: () => { start = Math.max(0, beat - 2); draw(); },
-  'new-project': () => confirmDiscard(() => { project = newProject(); activeSong = undefined; localAssets.clear(); history.clear(); selected = []; beat = start = 0; savedSignature = ''; void loadAudio(''); setCover(); changed(); renderLibrary(); renderInspector(); settings(); }),
+  'new-project': () => confirmDiscard(() => { ++loadingProject; project = newProject(); activeSong = undefined; localAssets.clear(); history.clear(); selected = []; beat = start = 0; savedSignature = ''; void loadAudio(''); setCover(); changed(); renderLibrary(); renderInspector(); settings(); }),
   import: () => confirmDiscard(() => $<HTMLInputElement>('import-input').click()),
-  'workspace-folder': () => void openWorkspaceFolder(),
+  'workspace-folder': () => { if (project.songId && dirty) confirmDiscard(() => void openWorkspaceFolder()); else void openWorkspaceFolder(); },
+  'workspace-refresh': () => void refreshWorkspace(), 'workspace-authorize': () => void authorizeWorkspace(),
   'add-at-beat': () => add(mode === 'notes' ? 'notes' : mode, mode === 'events' ? eventType : 0), 'add-foot': () => add('ringNotes'), 'hold-add': () => add('ringNotes', 0, 0, snap(beat, division), true),
   metronome: () => { metronome = !metronome; $('metronome').classList.toggle('active', metronome); $('metronome').setAttribute('aria-pressed', String(metronome)); if (metronome) clickBeat(); },
   'view-settings': () => {
-    modal('编辑设置', `<div class="view-defaults"><label>默认纵深拉伸（×）<input id="default-depth" aria-label="默认纵深拉伸" type="number" min="0.25" max="10" step="any" required value="${viewDefaults.depthScale}"></label><label>默认预览范围（拍）<input id="default-preview-range" aria-label="默认预览范围" type="number" min="1" max="64" step="any" required value="${viewDefaults.previewRange}"></label></div><p class="field-help">修改默认值后点击完成，立即应用并记住。场景中的滑杆仅临时调整，不覆盖默认值。</p><label class="settings-opacity">圆环不透明度<input id="ring-opacity" aria-label="圆环不透明度" type="range" min="0" max="100" step="any" value="${(spatialPreview?.ringOpacity ?? .22) * 100}"><output id="ring-opacity-value">${Math.round((spatialPreview?.ringOpacity ?? .22) * 100)}%</output></label><fieldset class="note-opacity-settings"><legend>音符不透明度</legend><label class="check-setting"><input id="note-opacity-linked" type="checkbox" ${noteOpacity.linked ? 'checked' : ''}>同步调整手部和脚部</label>${(['hand', 'foot'] as const).map(key => `<label class="settings-opacity">${key === 'hand' ? '手部音符' : '脚部音符'}<input id="${key}-opacity" aria-label="${key === 'hand' ? '手部' : '脚部'}音符不透明度" type="range" min="0" max="100" step="any" value="${noteOpacity[key] * 100}"><output id="${key}-opacity-value">${Math.round(noteOpacity[key] * 100)}%</output></label>`).join('')}<p class="field-help">0% 完全透明，100% 不透明。脚部长音符同步调整，选中标记仍清晰显示。</p></fieldset><label class="check-setting"><input id="wheel-reverse" type="checkbox" ${wheelReverse ? 'checked' : ''}>歌曲进度滚轮反向</label><p class="field-help">默认向上滚动前进，勾选后向下滚动前进。Ctrl＋滚轮切换吸附档位；Alt＋滚轮编辑脚部长音符长度。</p><div class="modal-actions"><button id="view-apply" class="primary">完成</button></div>`);
+    modal('编辑设置', `<div class="view-defaults">${([ ["depthMin", "纵深最小值"], ["depthMax", "纵深最大值"], ["previewMin", "预览范围最小值"], ["previewMax", "预览范围最大值"] ] as const).map(([key, label]) => `<label>${label}<input id="${key}" aria-label="${label}" type="number" min="0.000001" step="any" required value="${viewDefaults[key]}"></label>`).join('')}<label>默认纵深拉伸（×）<input id="default-depth" aria-label="默认纵深拉伸" type="number" min="0.000001" step="any" required value="${viewDefaults.depthScale}"></label><label>默认预览范围（拍）<input id="default-preview-range" aria-label="默认预览范围" type="number" min="0.000001" step="any" required value="${viewDefaults.previewRange}"></label></div><p class="field-help">修改默认值后点击完成，立即应用并记住。场景中的滑杆仅临时调整，不覆盖默认值。</p><label class="settings-opacity">圆环不透明度<input id="ring-opacity" aria-label="圆环不透明度" type="range" min="0" max="100" step="any" value="${(spatialPreview?.ringOpacity ?? .22) * 100}"><output id="ring-opacity-value">${Math.round((spatialPreview?.ringOpacity ?? .22) * 100)}%</output></label><fieldset class="note-opacity-settings"><legend>音符不透明度</legend><label class="check-setting"><input id="note-opacity-linked" type="checkbox" ${noteOpacity.linked ? 'checked' : ''}>同步调整手部和脚部</label>${(['hand', 'foot'] as const).map(key => `<label class="settings-opacity">${key === 'hand' ? '手部音符' : '脚部音符'}<input id="${key}-opacity" aria-label="${key === 'hand' ? '手部' : '脚部'}音符不透明度" type="range" min="0" max="100" step="any" value="${noteOpacity[key] * 100}"><output id="${key}-opacity-value">${Math.round(noteOpacity[key] * 100)}%</output></label>`).join('')}<p class="field-help">0% 完全透明，100% 不透明。脚部长音符同步调整，选中标记仍清晰显示。</p></fieldset><label class="check-setting"><input id="wheel-reverse" type="checkbox" ${wheelReverse ? 'checked' : ''}>歌曲进度滚轮反向</label><p class="field-help">默认向上滚动前进，勾选后向下滚动前进。Ctrl＋滚轮切换吸附档位；Alt＋滚轮调整纵深；指向脚部音符时编辑长音符长度。</p><div class="modal-actions"><button id="view-apply" class="primary">完成</button></div>`);
     $('ring-opacity').oninput = () => { const value = Number($<HTMLInputElement>('ring-opacity').value); spatialPreview?.setRingOpacity(value / 100); $('ring-opacity-value').textContent = `${Math.round(value)}%`; };
     const applyOpacity = (key: 'hand' | 'foot') => {
       noteOpacity[key] = Number($<HTMLInputElement>(`${key}-opacity`).value) / 100;
@@ -456,17 +521,26 @@ const actions: Record<string, () => void> = {
     $('note-opacity-linked').onchange = () => { noteOpacity.linked = $<HTMLInputElement>('note-opacity-linked').checked; applyOpacity('hand'); };
     $('wheel-reverse').onchange = () => { wheelReverse = $<HTMLInputElement>('wheel-reverse').checked; localStorage.setItem('ringmapper-wheel-reverse', String(wheelReverse)); };
     $('view-apply').onclick = () => {
-      const depthInput = $<HTMLInputElement>('default-depth'), rangeInput = $<HTMLInputElement>('default-preview-range');
-      if (!depthInput.reportValidity() || !rangeInput.reportValidity()) return;
-      const depthScale = Number(depthInput.value), previewRange = Number(rangeInput.value);
-      if (depthScale !== viewDefaults.depthScale) setDepthZoom(depthScale);
-      if (previewRange !== viewDefaults.previewRange) setPreviewRange(previewRange);
-      viewDefaults = { depthScale, previewRange };
+      const next = { ...viewDefaults };
+      for (const key of ['depthMin', 'depthMax', 'previewMin', 'previewMax', 'depthScale', 'previewRange'] as const) {
+        const input = $<HTMLInputElement>(key === 'depthScale' ? 'default-depth' : key === 'previewRange' ? 'default-preview-range' : key);
+        if (!input.reportValidity() || !Number.isFinite(Number(input.value))) return;
+        next[key] = Number(input.value);
+      }
+      if (next.depthMin >= next.depthMax || next.previewMin >= next.previewMax) { notify('最小值必须小于最大值'); return; }
+      if (next.depthScale < next.depthMin || next.depthScale > next.depthMax || next.previewRange < next.previewMin || next.previewRange > next.previewMax) { notify('默认值必须在对应的最小值和最大值之间'); return; }
+      const depth = next.depthScale !== viewDefaults.depthScale ? next.depthScale : scale / 48;
+      const range = next.previewRange !== viewDefaults.previewRange ? next.previewRange : Number($<HTMLInputElement>('preview-range').value);
+      viewDefaults = next;
+      for (const [id, min, max] of [['depth-zoom', next.depthMin, next.depthMax], ['preview-range', next.previewMin, next.previewMax]] as const) {
+        const input = $<HTMLInputElement>(id); input.min = String(min); input.max = String(max);
+      }
+      setDepthZoom(depth); setPreviewRange(range);
       try { localStorage.setItem('ringmapper-view-defaults', JSON.stringify(viewDefaults)); } catch { notify('默认值已应用，但浏览器无法记住设置'); }
       $<HTMLDialogElement>('modal').close();
     };
   },
-  help: () => modal('快捷键与操作', `<div class="shortcut-list">${[['Space', '播放 / 暂停'], ['Ctrl + Z / Y', '撤销 / 重做'], ['Ctrl + C / V', '复制 / 在播放头粘贴'], ['Ctrl + S', '保存谱面'], ['Ctrl + F', '左右镜像'], ['Ctrl + B', '在当前拍添加书签'], ['Ctrl + A', '选择当前类别中视野内的对象'], ['Delete', '优先删除选中项；未选中时删除鼠标下对象'], ['Q', '切换红蓝放置颜色'], ['1 / 2 / 3', '切换音符 / 障碍物 / 灯光'], ['按住 Shift', '暂时禁止放置（保留多选与相机控制）'], ['← / →', '前后移动一个吸附单位'], ['Shift + 点击', '多选'], ['拖动时间轴音符', '移动节拍和位置'], ['Alt + 拖动手部音符', '更改击打方向'], ['时间轴 Alt + 拖动脚部', '调整持续时长'], ['鼠标中键', '切换类型 0 / 1'], ['时间轴右键', '删除音符'], ['3D 右键拖动 / WASD', '旋转 / 移动相机'], ['3D 滚轮', '向上前进 / 向下后退，可在设置反向'], ['3D 右键 + Shift / 空格', '降低 / 升高相机'], ['3D Alt + 滚轮', '鼠标指向脚部音符，向上加长 / 向下缩短一个吸附单位；0 拍转为短音符'], ['3D Alt + 左键拖动', '拖动音符到对应轨道的其他位置'], ['3D Alt + 点击', '直接选中与圆环重叠的已有音符'], ['3D ＋ / −', '拉近 / 拉远相机'], ['Ctrl + 滚轮', '切换 SNAP 预设'], ['双击组内音符', '选中整个组']].map(([k, v]) => `<div><kbd>${k}</kbd><span>${v}</span></div>`).join('')}</div><p class="field-help">源文件保存前自动备份到 .ringmapper-backups。浏览器会保存最近一次工作草稿；本工具不连接官方账号。</p>`),
+  help: () => modal('快捷键与操作', `<div class="shortcut-list">${[['Space', '播放 / 暂停'], ['Ctrl + Z / Y', '撤销 / 重做'], ['Ctrl + C / V', '复制 / 在播放头粘贴'], ['Ctrl + S', '保存谱面'], ['Ctrl + F', '左右镜像'], ['Ctrl + B', '在当前拍添加书签'], ['Ctrl + A', '选择当前类别中视野内的对象'], ['Delete', '优先删除选中项；未选中时删除鼠标下对象'], ['Q', '切换红蓝放置颜色'], ['1 / 2 / 3', '切换音符 / 障碍物 / 灯光'], ['按住 Shift', '暂时禁止放置（保留多选与相机控制）'], ['← / →', '前后移动一个吸附单位'], ['Shift + 点击', '多选'], ['拖动时间轴音符', '移动节拍和位置'], ['Alt + 拖动手部音符', '更改击打方向'], ['时间轴 Alt + 拖动脚部', '调整持续时长'], ['鼠标中键', '切换类型 0 / 1'], ['时间轴右键', '删除音符'], ['3D 右键拖动 / WASD', '旋转 / 移动相机'], ['3D 滚轮', '向上前进 / 向下后退，可在设置反向'], ['3D 右键 + Shift / 空格', '降低 / 升高相机'], ['3D Alt + 滚轮', '调整纵深；鼠标指向脚部音符时，向上加长 / 向下缩短一个吸附单位；0 拍转为短音符'], ['3D Alt + 左键拖动', '拖动音符到对应轨道的其他位置'], ['3D Alt + 点击', '直接选中与圆环重叠的已有音符'], ['3D ＋ / −', '拉近 / 拉远相机'], ['Ctrl + 滚轮', '切换 SNAP 预设'], ['双击组内音符', '选中整个组']].map(([k, v]) => `<div><kbd>${k}</kbd><span>${v}</span></div>`).join('')}</div><p class="field-help">源文件保存前自动备份到 .ringmapper-backups。浏览器会保存最近一次工作草稿；本工具不连接官方账号。</p>`),
 };
 app.addEventListener('click', e => {
   const el = (e.target as HTMLElement).closest<HTMLElement>('button'); if (!el) return;
@@ -480,7 +554,7 @@ app.addEventListener('click', e => {
   if (el.dataset.createMode && el.dataset.createDifficulty) { addDifficulty(el.dataset.createMode, el.dataset.createDifficulty); return; }
   if (actions[el.id]) { actions[el.id](); return; }
   if (el.dataset.song) { const s = songs.find(s => s.id === el.dataset.song)!; confirmDiscard(() => void openSong(s)); }
-  if (el.dataset.chart && el.dataset.chart !== project.chartPath) { if (localAssets.has(el.dataset.chart)) void openLocalChart(el.dataset.chart); else if (activeSong) confirmDiscard(() => void openSong(activeSong!, el.dataset.chart)); }
+  if (el.dataset.chart && el.dataset.chart !== project.chartPath) void openLocalChart(el.dataset.chart);
   if (el.dataset.mode) setMode(el.dataset.mode as typeof mode);
   if (el.dataset.overlap !== undefined) { const o = overlaps[Number(el.dataset.overlap)]; if (o) { $<HTMLDialogElement>('modal').close(); setBeat(o.time); select(o.indices.map(index => ({ kind: o.kind, index }))); } }
   if (el.dataset.color) { noteType = Number(el.dataset.color); renderInspector(); }
@@ -527,9 +601,20 @@ function setPlaybackRate(rate: number) {
 $('speed').addEventListener('input', () => setPlaybackRate(Number($<HTMLInputElement>('speed').value)));
 $('volume').addEventListener('input', () => { audio.volume = Number($<HTMLInputElement>('volume').value); });
 $('import-input').addEventListener('change', () => { const input = $<HTMLInputElement>('import-input'); if (input.files?.length) void importFiles([...input.files]); input.value = ''; });
-$('audio-input').addEventListener('change', () => {
-  const file = $<HTMLInputElement>('audio-input').files?.[0]; if (!file) return;
-  mutate(() => { project.info.songFilename = file.name; localAssets.set(file.name, file); }); void loadAudio(URL.createObjectURL(file));
+$('audio-input').addEventListener('change', async () => {
+  const input = $<HTMLInputElement>('audio-input'); let file = input.files?.[0]; input.value = ''; if (!file) return;
+  if (/\.zip$/i.test(file.name)) {
+    try {
+      const zip = await JSZip.loadAsync(file);
+      if (Object.keys(zip.files).some(name => /(^|\/)Info\.yaml$/i.test(name))) { $<HTMLDialogElement>('modal').close(); const archive = file; confirmDiscard(() => { void importFiles([archive]); }); return; }
+      const tracks = Object.values(zip.files).filter(entry => !entry.dir && /\.(ogg|mp3|wav)$/i.test(entry.name) && !entry.name.startsWith('__MACOSX/'));
+      if (tracks.length !== 1) { notify(tracks.length ? 'ZIP 包含多首音频，请每个 ZIP 仅放入一首歌曲' : 'ZIP 中没有 OGG、MP3 或 WAV 音频'); return; }
+      const blob = await tracks[0].async('blob'); if (blob.size > 200_000_000) throw new Error('音频超过 200MB');
+      file = new File([blob], tracks[0].name.split('/').pop()!);
+    } catch (error: any) { notify('ZIP 导入失败：' + error.message); return; }
+  }
+  const audioFile = file;
+  mutate(() => { project.info.songFilename = audioFile.name; localAssets.set(audioFile.name, audioFile); }); void loadAudio(URL.createObjectURL(audioFile));
   audio.addEventListener('loadedmetadata', () => { if (Number.isFinite(audio.duration)) { project.info.songDuration = audio.duration; const input = document.querySelector<HTMLInputElement>('[data-info="songDuration"]'); if (input) input.value = String(audio.duration); changed(); } }, { once: true }); notify('音频已载入');
 });
 $('cover-input').addEventListener('change', async () => {
@@ -656,7 +741,8 @@ preview.addEventListener('wheel', e => {
   if (e.ctrlKey) { cycleSnap(delta); return; }
   if (e.altKey) {
     const { x, y } = canvasPoint(e, preview), hit = spatialPreview?.pick(x, y, 'notes');
-    if (hit?.kind !== 'ringNotes' || hit.index === undefined || spatialDrag) { holdWheel.index = -1; return; }
+    if (spatialDrag) return;
+    if (hit?.kind !== 'ringNotes' || hit.index === undefined) { holdWheel.index = -1; setDepthZoom(scale / 48 - delta / 100); return; }
     const now = performance.now();
     if (holdWheel.index !== hit.index || now - holdWheel.last > 300 || Math.sign(delta) !== Math.sign(holdWheel.delta)) holdWheel = { index: hit.index, delta: 0, last: now };
     holdWheel.delta += delta; holdWheel.last = now;
@@ -675,13 +761,14 @@ preview.addEventListener('wheel', e => {
 preview.addEventListener('contextmenu', e => e.preventDefault());
 preview.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
 function setDepthZoom(value: number) {
-  const zoom = Math.max(.25, Math.min(10, value));
+  const zoom = Math.max(viewDefaults.depthMin, Math.min(viewDefaults.depthMax, value));
   scale = 48 * zoom; spatialPreview?.setDepthScale(zoom);
   $<HTMLInputElement>('depth-zoom').value = String(zoom); $('depth-zoom-value').textContent = `${zoom.toFixed(2)}×`;
   draw(); updateTransport();
 }
 $('depth-zoom').addEventListener('input', () => setDepthZoom(Number($<HTMLInputElement>('depth-zoom').value)));
 function setPreviewRange(value: number) {
+  value = Math.max(viewDefaults.previewMin, Math.min(viewDefaults.previewMax, value));
   $<HTMLInputElement>('preview-range').value = String(value);
   if (spatialPreview) spatialPreview.lookAhead = value;
   $('preview-range-value').textContent = `${value.toFixed(2)} 拍`; draw();
@@ -787,40 +874,50 @@ window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); 
 new ResizeObserver(() => { draw(); updateTransport(); }).observe($('timeline-panel') ?? timeline.parentElement!);
 new ResizeObserver(draw).observe(preview);
 async function init() {
-  iconsRefresh(); renderSummary(); renderInspector(); draw(); requestAnimationFrame(frame);
-  try { songs = await api<Song[]>('/api/catalog'); renderLibrary();
-    const draft = localStorage.getItem('ringmapper-draft');
-    if (draft) {
-      const data = JSON.parse(draft);
-      modal('恢复上次工作', `<p>发现「${escape(data.project.info.songName)}」的浏览器草稿。是否继续编辑？</p><p class="field-help">草稿保存谱面数据；未保存的本地音频和封面需要重新导入。</p><div class="modal-actions"><button id="restore-draft" class="primary">恢复草稿</button><button id="skip-draft">打开曲库</button></div>`);
-      $('restore-draft').onclick = () => { project = data.project; activeSong = songs.find(s => s.id === project.songId); savedSignature = ''; selected = []; changed(); renderLibrary(); renderInspector(); if (activeSong?.audio) void loadAudio(asset(activeSong.id, activeSong.audio)); $<HTMLDialogElement>('modal').close(); };
-      $('skip-draft').onclick = () => { localStorage.removeItem('ringmapper-draft'); $<HTMLDialogElement>('modal').close(); void openSong(songs.find(s => s.id === 'caocao') ?? songs[0]); };
-    } else if (songs.length) await openSong(songs.find(s => s.id === 'caocao') ?? songs[0]);
-  } catch (e: any) { $('song-list').innerHTML = '<div class="empty-library">本地曲库暂不可用<br>仍可新建或导入 ZIP 编辑</div>'; notify(e.message); }
+  iconsRefresh(); savedSignature = JSON.stringify(project); renderSummary(); renderInspector(); renderLibrary(); draw(); requestAnimationFrame(frame);
+  try {
+    recentWorkspace = await stored<WorkspaceRecord>('workspace');
+    if (recentWorkspace) {
+      workspace = new LocalWorkspace(recentWorkspace); workspaceReady = await workspace.permitted('read');
+      if (workspaceReady) songs = await workspace.catalog();
+    }
+  } catch (e: any) { workspaceReady = false; notify('本地工作区暂不可用：' + e.message); }
+  workspaceStatus(); renderLibrary();
+  let draft: Draft | undefined;
+  try { draft = await stored<Draft>('draft'); if (!draft) { const legacy = localStorage.getItem('ringmapper-draft'); if (legacy) draft = { ...JSON.parse(legacy), assets: new Map() }; } } catch { notify('无法恢复浏览器草稿，仍可打开文件或导入 ZIP'); }
+  if (draft?.project) {
+    const data = draft;
+    modal('恢复上次工作', `<p>发现《${escape(data.project.info.songName)}》的浏览器草稿。是否继续编辑？</p><p class="field-help">草稿绑定原工作区；写回之前需要授权对应目录。未授权时仍可编辑和导出恢复内容。</p><div class="modal-actions"><button id="restore-draft" class="primary">恢复草稿</button><button id="skip-draft">打开曲库</button></div>`);
+    $('restore-draft').onclick = () => { project = data.project; localAssets = data.assets instanceof Map ? data.assets : new Map(); activeSong = workspaceReady && project.workspaceId === workspace?.id ? songs.find(s => s.id === project.songId) : undefined; savedSignature = ''; selected = []; changed(); renderLibrary(); renderInspector(); void loadProjectMedia().catch(e => notify('资源恢复失败：' + e.message)); $<HTMLDialogElement>('modal').close(); };
+    $('skip-draft').onclick = () => { localStorage.removeItem('ringmapper-draft'); void stored('draft', null); $<HTMLDialogElement>('modal').close(); if (songs.length) void openSong(songs.find(s => s.id === 'caocao') ?? songs[0]); };
+  } else if (songs.length) await openSong(songs.find(s => s.id === 'caocao') ?? songs[0]);
 }
 void init();
-
-async function blobBase64(blob: Blob): Promise<string> { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = () => reject(reader.error); reader.readAsDataURL(blob); }); }
 
 async function blobText(blob: Blob) { return decodeText(new Uint8Array(await blob.arrayBuffer())); }
 
 function chartEntries() {
   const entries = new Map((activeSong?.charts ?? []).map(c => [c.path, c]));
+  const refs = [...(project.info.difficultyCiphermapSets ?? []), ...(project.info.difficultyBeatmapSets ?? [])].flatMap((set: any) => set.difficultyCiphermaps ?? set.difficultyBeatmaps ?? []);
+  const events = new Set(refs.map((entry: any) => String(entry.eventmapFilename ?? '').replaceAll('\\', '/')));
   for (const filename of [...localAssets.keys(), project.chartPath]) {
-    if (!/\.yaml$/i.test(filename) || filename === 'Info.yaml' || /Event\.yaml$/i.test(filename)) continue;
+    if (!/\.yaml$/i.test(filename) || filename === 'Info.yaml' || events.has(filename) || /Event\.yaml$/i.test(filename)) continue;
     entries.set(filename, { path: filename, eventPath: filename.replace(/\.yaml$/, 'Event.yaml'), mode: filename.split('/')[0], difficulty: filename.split('/').pop()!.replace(/RingDance|Ring|\.yaml/g, '') });
   }
   return [...entries.values()];
 }
 async function openLocalChart(filename: string) {
   try {
-    updateMetadata(project); localAssets.set(project.chartPath, new Blob([writeYaml(project.chart)])); localAssets.set(project.eventPath, new Blob([writeYaml(project.event)]));
-    const chart = readYaml(await blobText(localAssets.get(filename)!));
+    const wasDirty = dirty;
+    if (wasDirty) { updateMetadata(project); localAssets.set(project.chartPath, new Blob([writeYaml(project.chart)])); localAssets.set(project.eventPath, new Blob([writeYaml(project.event)])); }
+    const read = async (name: string) => localAssets.get(name) ?? (workspaceReady && workspace && project.workspaceId === workspace.id && project.songId ? await workspace.asset(project.songId, name) : undefined);
+    const chartBlob = await read(filename); if (!chartBlob) throw new Error('找不到此难度文件，请重新授权原目录');
+    const chart = readYaml(await blobText(chartBlob));
     const entry = [...(project.info.difficultyCiphermapSets ?? []), ...(project.info.difficultyBeatmapSets ?? [])].flatMap((s: any) => s.difficultyCiphermaps ?? s.difficultyBeatmaps ?? []).find((e: any) => (e.ciphermapFilename ?? e.beatmapFilename) === filename);
-    const eventPath = entry?.eventmapFilename ?? filename.replace(/\.yaml$/, 'Event.yaml');
-    const event = localAssets.has(eventPath) ? readYaml(await blobText(localAssets.get(eventPath)!)) : { version: chart.version, events: [] };
+    const eventPath = String(entry?.eventmapFilename ?? filename.replace(/\.yaml$/, 'Event.yaml')).replaceAll('\\', '/');
+    const eventBlob = await read(eventPath); const event = eventBlob ? readYaml(await blobText(eventBlob)) : { version: chart.version, events: [] };
     stop(); project.chart = chart; project.event = event; project.chartPath = filename; project.eventPath = eventPath; selected = []; history.clear();
-    if (project.songId) project.revision = (await api<{ revision: string }>(`/api/revision?song=${encodeURIComponent(project.songId)}&chart=${encodeURIComponent(filename)}&event=${encodeURIComponent(eventPath)}`)).revision;
+    savedSignature = wasDirty ? '' : JSON.stringify(project);
     changed(); renderInspector();
   } catch (e: any) { notify('切换难度失败：' + e.message); }
 }
