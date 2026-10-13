@@ -24,9 +24,9 @@ async function endpoints(page: Page) {
 
 test('view defaults accept numbers, apply immediately, survive reload, and temporary sliders do not overwrite them', async ({ page }) => {
   await page.goto('/'); await expect(page.locator('#song-name')).toHaveText('曹操');
-  await expect(page.locator('#depth-zoom')).toHaveValue('10'); await expect(page.locator('#preview-range')).toHaveValue('3');
+  await expect(page.locator('#depth-zoom')).toHaveValue('10'); await expect(page.locator('#preview-range')).toHaveValue('4');
   await page.locator('#view-settings').click();
-  await expect(page.locator('#default-depth')).toHaveValue('10'); await expect(page.locator('#default-preview-range')).toHaveValue('3');
+  await expect(page.locator('#default-depth')).toHaveValue('10'); await expect(page.locator('#default-preview-range')).toHaveValue('4');
   await page.locator('#default-depth').fill('21'); await page.locator('#view-apply').click(); await expect(page.locator('#modal')).toBeVisible();
   await page.locator('#previewMax').fill('16');
   await page.locator('#default-depth').fill('6.25'); await page.locator('#default-preview-range').fill('12.5'); await page.locator('#view-apply').click();

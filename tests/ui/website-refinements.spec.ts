@@ -29,7 +29,7 @@ test('tutorial attention is cleared only by opening it; custom view bounds persi
   await page.locator('#tutorial').click(); await page.locator('#close-modal').click();
   await page.reload(); await expect(page.locator('#tutorial')).not.toHaveClass(/tutorial-unseen/);
   await expect(page.locator('#depth-zoom')).toHaveValue('10'); await expect(page.locator('#depth-zoom')).toHaveAttribute('min', '2'); await expect(page.locator('#depth-zoom')).toHaveAttribute('max', '20');
-  await expect(page.locator('#preview-range')).toHaveValue('3'); await expect(page.locator('#preview-range')).toHaveAttribute('max', '8');
+  await expect(page.locator('#preview-range')).toHaveValue('4'); await expect(page.locator('#preview-range')).toHaveAttribute('max', '8');
   await page.locator('#preview').dispatchEvent('wheel', { deltaY: -100, altKey: true, clientX: 5, clientY: 5 });
   await expect(page.locator('#depth-zoom')).toHaveValue('11'); await expect(page.locator('#beat-input')).toHaveValue('0.000');
   await page.locator('#view-settings').click();
@@ -70,4 +70,75 @@ test('passed notes disappear immediately, long foot notes remain until their end
   const counts = () => page.locator('#preview').evaluate((el: HTMLCanvasElement) => ['hand-notes', 'foot-notes'].map(name => (el.spatialPreview!.scene.getObjectByName(name) as import('three').InstancedMesh).count));
   const seek = async (beat: string) => { await page.locator('#beat-input').fill(beat); await page.keyboard.press('Enter'); };
   await expect.poll(counts).toEqual([1, 2]); await seek('1.01'); await expect.poll(counts).toEqual([0, 1]); await seek('2.01'); await expect.poll(counts).toEqual([0, 0]); await seek('1'); await expect.poll(counts).toEqual([1, 2]);
+});
+
+
+test('pause snaps the current playhead in either direction and rapid virtual toggles do not accumulate progress', async ({ page }) => {
+  await page.goto('/');
+  const togglePair = async (at: number, count = 1) => page.evaluate(({ at, count }) => {
+    const seek = document.querySelector<HTMLInputElement>('#seek')!;
+    seek.value = String(at); seek.dispatchEvent(new Event('input', { bubbles: true }));
+    const play = document.querySelector<HTMLButtonElement>('#play')!;
+    for (let i = 0; i < count; i++) { play.click(); play.click(); }
+  }, { at, count });
+  await togglePair(2.14); await expect(page.locator('#beat-input')).toHaveValue('2.250');
+  await togglePair(2.09); await expect(page.locator('#beat-input')).toHaveValue('2.000');
+  await page.locator('#division').selectOption('3'); await togglePair(2.18); await expect(page.locator('#beat-input')).toHaveValue('2.333');
+  await page.locator('#division').selectOption('4'); await togglePair(2, 20); await expect(page.locator('#beat-input')).toHaveValue('2.000');
+  await expect(page.locator('#play')).toHaveAttribute('aria-pressed', 'false');
+  await page.keyboard.press('Space'); await expect(page.locator('#play')).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Space'); await expect(page.locator('#play')).toHaveAttribute('aria-pressed', 'false');
+  expect(Number(await page.locator('#seek').inputValue()) * 4 % 1).toBeCloseTo(0, 6);
+});
+
+function silentWave() {
+  const samples = 8000 * 10, data = Buffer.alloc(44 + samples * 2);
+  data.write('RIFF'); data.writeUInt32LE(data.length - 8, 4); data.write('WAVEfmt ', 8); data.writeUInt32LE(16, 16); data.writeUInt16LE(1, 20); data.writeUInt16LE(1, 22); data.writeUInt32LE(8000, 24); data.writeUInt32LE(16000, 28); data.writeUInt16LE(2, 32); data.writeUInt16LE(16, 34); data.write('data', 36); data.writeUInt32LE(samples * 2, 40); return data;
+}
+
+test('pending audio play requests can be paused and stale promises cannot restart or stop newer playback', async ({ page }) => {
+  await page.addInitScript(() => {
+    const NativeAudio = window.Audio;
+    (window as any).__plays = [];
+    (window as any).Audio = function () {
+      const audio = new NativeAudio(); (window as any).__audio = audio;
+      audio.play = () => new Promise<void>((resolve, reject) => (window as any).__plays.push({ resolve, reject }));
+      return audio;
+    };
+  });
+  await page.goto('/');
+  await page.locator('#audio-input').setInputFiles({ name: 'test.wav', mimeType: 'audio/wav', buffer: silentWave() });
+  await expect.poll(() => page.evaluate(() => (window as any).__audio.readyState)).toBeGreaterThanOrEqual(1);
+  await page.evaluate(() => { const input = document.querySelector<HTMLInputElement>('#seek')!; input.value = '2.14'; input.dispatchEvent(new Event('input')); });
+  await page.locator('#play').click(); await expect(page.locator('#play')).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('#play').click(); await expect(page.locator('#beat-input')).toHaveValue('2.250');
+  expect(await page.evaluate(() => (window as any).__audio.currentTime)).toBeCloseTo(1.125, 5);
+  await page.evaluate(() => (window as any).__plays[0].resolve());
+  await expect(page.locator('#play')).toHaveAttribute('aria-pressed', 'false');
+  await page.locator('#play').click(); await page.locator('#play').click(); await page.locator('#play').click();
+  await page.evaluate(() => (window as any).__plays[1].reject(new DOMException('Paused', 'AbortError')));
+  await expect(page.locator('#play')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#toast')).not.toContainText('音频无法播放');
+  await page.locator('#play').click(); await page.evaluate(() => (window as any).__plays[2].resolve());
+  await expect(page.locator('#play')).toHaveAttribute('aria-pressed', 'false'); await expect(page.locator('#beat-input')).toHaveValue('2.250');
+});
+
+test('hovered bookmark deletion is undoable and does not delete selected notes or consume text editing', async ({ page }) => {
+  await page.goto('/'); await page.locator('#add-at-beat').click(); await page.keyboard.press('Control+a');
+  await page.keyboard.press('Control+b'); await expect(page.locator('.seek-bookmark')).toHaveCount(1);
+  await page.locator('.seek-bookmark').hover(); await page.keyboard.press('Delete');
+  await expect(page.locator('.seek-bookmark')).toHaveCount(0); await expect(page.locator('#note-count')).toHaveText('1');
+  await page.keyboard.press('Control+z'); await expect(page.locator('.seek-bookmark')).toHaveCount(1);
+  await page.locator('#search').fill('text'); await page.locator('.seek-bookmark').hover(); await page.keyboard.press('Delete');
+  await expect(page.locator('.seek-bookmark')).toHaveCount(1);
+});
+
+test('song library collapses left, expands the canvas and can reopen after reload', async ({ page }) => {
+  await page.goto('/'); const before = await page.locator('#preview').boundingBox();
+  await page.locator('#toggle-library').click(); await expect(page.locator('#toggle-library')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('#song-library')).toBeHidden();
+  const after = await page.locator('#preview').boundingBox(); expect(after!.width).toBeGreaterThan(before!.width + 150); expect(after!.x).toBe(0);
+  await page.reload(); await expect(page.locator('#toggle-library')).toHaveAttribute('aria-expanded', 'false');
+  await page.locator('#toggle-library').click(); await expect(page.locator('#song-library')).toBeVisible(); await expect(page.locator('#toggle-library')).toHaveAttribute('aria-expanded', 'true');
+  const restored = await page.locator('#preview').boundingBox(); expect(restored!.width).toBe(before!.width);
 });

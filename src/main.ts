@@ -55,7 +55,7 @@ let localAssets = new Map<string, Blob>(), history = new History(), savedSignatu
 const audio = new Audio(); audio.preload = 'auto';
 const app = $('app');
 app.innerHTML = `
-<div class="workspace"><aside class="library"><div class="brand"><span class="brand-mark">◎</span><div>RingMapper<small>本地创作 · 谱面工作台</small></div></div><div class="section-label">WORKSPACE <button id="workspace-folder" title="选择电脑中包含歌曲子目录的 Map 文件夹" aria-label="打开本地文件夹">${icon('folder-open')}打开本地文件夹</button></div><div class="workspace-access"><span id="workspace-name">尚未选择目录</span><button id="workspace-authorize" hidden>重新授权</button><button id="workspace-refresh" title="刷新本地曲库">刷新</button></div><div class="library-actions"><button id="new-project">${icon('plus')}新建</button><button id="import">${icon('folder-input')}导入</button></div><div class="search-wrap">${icon('search')}<input id="search" placeholder="搜索歌曲 / 艺术家" aria-label="搜索歌曲"></div><div class="library-caption"><span>全部歌曲</span><span id="song-count">加载中</span></div><div id="song-list" class="song-list"></div><div class="library-bottom"><span class="status-dot"></span>本地工作区<span>文件留在电脑</span></div></aside>
+<div class="workspace"><aside class="library" id="song-library"><div class="brand"><span class="brand-mark">◎</span><div>RingMapper<small>本地创作 · 谱面工作台</small></div></div><div class="section-label">WORKSPACE <button id="workspace-folder" title="选择电脑中包含歌曲子目录的 Map 文件夹" aria-label="打开本地文件夹">${icon('folder-open')}打开本地文件夹</button></div><div class="workspace-access"><span id="workspace-name">尚未选择目录</span><button id="workspace-authorize" hidden>重新授权</button><button id="workspace-refresh" title="刷新本地曲库">刷新</button></div><div class="library-actions"><button id="new-project">${icon('plus')}新建</button><button id="import">${icon('folder-input')}导入</button></div><div class="search-wrap">${icon('search')}<input id="search" placeholder="搜索歌曲 / 艺术家" aria-label="搜索歌曲"></div><div class="library-caption"><span>全部歌曲</span><span id="song-count">加载中</span></div><div id="song-list" class="song-list"></div><div class="library-bottom"><span class="status-dot"></span>本地工作区<span>文件留在电脑</span></div></aside><button id="toggle-library" class="library-toggle" aria-controls="song-library" aria-expanded="true" aria-label="收起歌曲列表" title="收起歌曲列表"><b>‹</b><span>歌曲</span></button>
 <main id="scene-workspace"><section class="preview-panel" aria-label="3D 工作区">
 <div class="preview-viewport"><canvas id="preview" tabindex="0" aria-label="3D 圆环手部与下方脚部音符预览"></canvas></div>
 <button id="overlap-status" class="overlap-status" hidden aria-live="polite"></button><div class="scene-top"><div class="scene-song"><div class="song-details"><section class="songbar"><div class="song-cover" id="current-cover">◎</div><div class="song-info"><h1 id="song-name">未命名歌曲</h1><p id="artist-name">开始创作你的节奏</p></div><div class="song-meta"><span>BPM<strong id="bpm-display">120</strong></span><span>音符<strong id="note-count">0</strong></span></div><button id="settings" title="歌曲设置">${icon('settings-2')}</button></section>
@@ -65,7 +65,7 @@ app.innerHTML = `
 <section id="fill-panel" class="fill-panel" aria-label="圆环填充" hidden></section>
 <section class="timeline-panel is-collapsed" id="timeline-panel" aria-label="时间轴子窗口" inert><div class="timeline-toolbar"><div class="timeline-title">${icon('audio-lines')}时间轴 <span class="badge" id="visible-range">BEATS</span></div><div class="timeline-options"><button id="hide-timeline" title="向下收起时间轴">向下收起 ↓</button><button id="follow" title="定位到播放头">${icon('locate-fixed')}</button></div></div><div class="timeline-wrap"><canvas id="timeline" aria-label="谱面时间轴"></canvas></div><input id="scroll" class="timeline-scroll" type="range" min="0" max="256" step="0.25" value="0" aria-label="滚动时间轴"></section>
 
-<button class="timeline-toggle" id="toggle-timeline" aria-controls="timeline-panel" aria-expanded="false" title="展开传统时间轴">${icon('audio-lines')}<span>传统时间轴 ↑</span></button><footer class="transport"><div class="transport-buttons"><button id="home" title="回到开始">${icon('skip-back')}</button><button id="play" class="play-button" title="播放 / 暂停 Space">${icon('play')}</button></div><div class="transport-time"><strong id="time-display">00:00.000</strong><span>BEAT <input id="beat-input" type="number" min="0" step="0.25" value="0" aria-label="当前节拍"></span></div><div class="seek-wrap"><div id="seek-bookmarks" class="seek-bookmarks" aria-label="歌曲书签"></div><input id="seek" type="range" min="0" max="256" step="0.01" value="0" aria-label="播放进度"></div><div class="speed-control"><label class="speed-label" title="歌曲播放速度">倍速<input id="speed" aria-label="播放速度" type="range" min="0.1" max="2" step="any" value="1"><output id="speed-value">1.00×</output></label><button id="speed-reset" hidden title="恢复默认播放速度" aria-label="恢复默认播放速度">↺ 1×</button></div><div class="metronome-control"><button id="metronome" title="节拍器开关" aria-label="节拍器开关" aria-pressed="false">${icon('bell')}</button><input id="metronome-volume" aria-label="节拍器音量" title="节拍器音量" type="range" min="0" max="1" step="any" value="0.5"></div><label class="volume-label">${icon('volume-2')}<input id="volume" type="range" min="0" max="1" step="0.05" value="0.7" aria-label="音量"></label></footer>
+<button class="timeline-toggle" id="toggle-timeline" aria-controls="timeline-panel" aria-expanded="false" title="展开传统时间轴">${icon('audio-lines')}<span>传统时间轴 ↑</span></button><footer class="transport"><div class="transport-buttons"><button id="home" title="回到开始">${icon('skip-back')}</button><button id="play" class="play-button" aria-label="播放歌曲" aria-pressed="false" title="播放 / 暂停 Space">${icon('play')}</button></div><div class="transport-time"><strong id="time-display">00:00.000</strong><span>BEAT <input id="beat-input" type="number" min="0" step="0.25" value="0" aria-label="当前节拍"></span></div><div class="seek-wrap"><div id="seek-bookmarks" class="seek-bookmarks" aria-label="歌曲书签"></div><input id="seek" type="range" min="0" max="256" step="0.01" value="0" aria-label="播放进度"></div><div class="speed-control"><label class="speed-label" title="歌曲播放速度">倍速<input id="speed" aria-label="播放速度" type="range" min="0.1" max="2" step="any" value="1"><output id="speed-value">1.00×</output></label><button id="speed-reset" hidden title="恢复默认播放速度" aria-label="恢复默认播放速度">↺ 1×</button></div><div class="metronome-control"><button id="metronome" title="节拍器开关" aria-label="节拍器开关" aria-pressed="false">${icon('bell')}</button><input id="metronome-volume" aria-label="节拍器音量" title="节拍器音量" type="range" min="0" max="1" step="any" value="0.5"></div><label class="volume-label">${icon('volume-2')}<input id="volume" type="range" min="0" max="1" step="0.05" value="0.7" aria-label="音量"></label></footer>
 <div id="toast" role="status"></div><dialog id="modal"><div id="modal-content"></div></dialog><input id="import-input" type="file" accept=".zip,.yaml,.yml" multiple hidden><input id="audio-input" type="file" accept="audio/ogg,audio/mpeg,audio/wav,.zip" hidden><input id="cover-input" type="file" accept="image/png,image/jpeg,image/webp" hidden></section></main></div>`;
 function iconsRefresh() { createIcons({ icons }); }
 function notify(message: string) { $('toast').textContent = message; $('toast').classList.add('show'); setTimeout(() => $('toast').classList.remove('show'), 4500); }
@@ -193,12 +193,36 @@ function updateTransport() {
   $<HTMLInputElement>('seek').value = String(beat);
   $('visible-range').textContent = `${start.toFixed(1)} — ${(start + (timeline.clientWidth - timelineMargin) / scale).toFixed(1)} 拍`;
 }
-function stop() { audio.pause(); playing = false; $('play').innerHTML = icon('play'); iconsRefresh(); }
+// Mark playback intent synchronously; a pending play() must remain cancellable.
+let playbackRequest = 0;
+function playbackBeat(now = performance.now()) {
+  return audioUrl ? Math.max(0, secondsToBeat(audio.currentTime, project.info.beatsPerMinute, project.info.songTimeOffset || 0))
+    : virtualBeat + Math.max(0, now - virtualStart) / 1000 * project.info.beatsPerMinute / 60 * audio.playbackRate;
+}
+function showPlaybackState() {
+  $('play').innerHTML = icon(playing ? 'pause' : 'play');
+  $('play').setAttribute('aria-pressed', String(playing));
+  $('play').setAttribute('aria-label', playing ? '暂停播放' : '播放歌曲');
+  iconsRefresh();
+}
+function stop(alignToSnap = false) {
+  const position = alignToSnap && playing ? playbackBeat() : beat;
+  ++playbackRequest; audio.pause(); playing = false; showPlaybackState();
+  if (alignToSnap) setBeat(snap(position, division));
+}
 async function togglePlay() {
-  if (playing) { stop(); return; }
+  if (playing) { stop(true); return; }
   if (beat >= totalBeats()) setBeat(0);
-  if (audioUrl) { try { await audio.play(); } catch { notify('音频无法播放，请检查文件格式或重新选择音频'); return; } }
-  virtualStart = performance.now(); virtualBeat = beat; playing = true; $('play').innerHTML = icon('pause'); iconsRefresh();
+  const request = ++playbackRequest;
+  virtualStart = performance.now(); virtualBeat = beat; playing = true; showPlaybackState();
+  if (audioUrl) {
+    try { await audio.play(); }
+    catch {
+      // A subsequent pause, new song or newer play request supersedes this promise.
+      if (request !== playbackRequest) return;
+      stop(); notify('音频无法播放，请检查文件格式或重新选择音频');
+    }
+  }
 }
 let audioContext: AudioContext | undefined;
 function clickBeat() {
@@ -209,7 +233,7 @@ function clickBeat() {
 function frame(now: number) {
   spatialPreview?.tick(now);
   if (playing) {
-    beat = audioUrl ? Math.max(0, secondsToBeat(audio.currentTime, project.info.beatsPerMinute, project.info.songTimeOffset || 0)) : virtualBeat + (now - virtualStart) / 1000 * project.info.beatsPerMinute / 60 * Number($<HTMLInputElement>('speed').value);
+    beat = playbackBeat(now);
     if (metronome && Math.floor(beat) !== lastClickBeat) { lastClickBeat = Math.floor(beat); clickBeat(); }
     if (beat >= totalBeats() || audio.ended && !!audioUrl) stop();
     const windowSize = (timeline.clientWidth - timelineMargin) / scale;
@@ -331,7 +355,7 @@ function changeFillDensity(delta: number) {
 }
 function renderBookmarks() {
   const total = totalBeats(), marks = project.chart.customData?.bookmarks ?? [];
-  $('seek-bookmarks').innerHTML = marks.map((mark: any, index: number) => Number.isFinite(mark.time) && mark.time >= 0 ? `<button class="seek-bookmark" data-bookmark="${index}" style="left:${Math.min(100, mark.time / total * 100)}%" title="${escape(mark.name || '书签')} · beat ${Number(mark.time.toFixed(5))}" aria-label="书签 ${escape(mark.name || index + 1)}，第 ${Number(mark.time.toFixed(5))} 拍">◆</button>` : '').join('');
+  $('seek-bookmarks').innerHTML = marks.map((mark: any, index: number) => Number.isFinite(mark.time) && mark.time >= 0 ? `<button class="seek-bookmark" data-bookmark="${index}" style="left:${Math.min(100, mark.time / total * 100)}%" title="${escape(mark.name || '书签')} · beat ${Number(mark.time.toFixed(5))} · 悬停按 Del 删除" aria-label="书签 ${escape(mark.name || index + 1)}，第 ${Number(mark.time.toFixed(5))} 拍">◆</button>` : '').join('');
 }
 function addBookmark() {
   mutate(() => { project.chart.customData ??= {}; const marks = project.chart.customData.bookmarks ??= []; marks.push({ time: Number(beat.toFixed(6)), name: `书签 ${marks.length + 1}` }); });
@@ -540,7 +564,7 @@ const actions: Record<string, () => void> = {
       $<HTMLDialogElement>('modal').close();
     };
   },
-  help: () => modal('快捷键与操作', `<div class="shortcut-list">${[['Space', '播放 / 暂停'], ['Ctrl + Z / Y', '撤销 / 重做'], ['Ctrl + C / V', '复制 / 在播放头粘贴'], ['Ctrl + S', '保存谱面'], ['Ctrl + F', '左右镜像'], ['Ctrl + B', '在当前拍添加书签'], ['Ctrl + A', '选择当前类别中视野内的对象'], ['Delete', '优先删除选中项；未选中时删除鼠标下对象'], ['Q', '切换红蓝放置颜色'], ['1 / 2 / 3', '切换音符 / 障碍物 / 灯光'], ['按住 Shift', '暂时禁止放置（保留多选与相机控制）'], ['← / →', '前后移动一个吸附单位'], ['Shift + 点击', '多选'], ['拖动时间轴音符', '移动节拍和位置'], ['Alt + 拖动手部音符', '更改击打方向'], ['时间轴 Alt + 拖动脚部', '调整持续时长'], ['鼠标中键', '切换类型 0 / 1'], ['时间轴右键', '删除音符'], ['3D 右键拖动 / WASD', '旋转 / 移动相机'], ['3D 滚轮', '向上前进 / 向下后退，可在设置反向'], ['3D 右键 + Shift / 空格', '降低 / 升高相机'], ['3D Alt + 滚轮', '调整纵深；鼠标指向脚部音符时，向上加长 / 向下缩短一个吸附单位；0 拍转为短音符'], ['3D Alt + 左键拖动', '拖动音符到对应轨道的其他位置'], ['3D Alt + 点击', '直接选中与圆环重叠的已有音符'], ['3D ＋ / −', '拉近 / 拉远相机'], ['Ctrl + 滚轮', '切换 SNAP 预设'], ['双击组内音符', '选中整个组']].map(([k, v]) => `<div><kbd>${k}</kbd><span>${v}</span></div>`).join('')}</div><p class="field-help">源文件保存前自动备份到 .ringmapper-backups。浏览器会保存最近一次工作草稿；本工具不连接官方账号。</p>`),
+  help: () => modal('快捷键与操作', `<div class="shortcut-list">${[['Space', '播放 / 暂停'], ['Ctrl + Z / Y', '撤销 / 重做'], ['Ctrl + C / V', '复制 / 在播放头粘贴'], ['Ctrl + S', '保存谱面'], ['Ctrl + F', '左右镜像'], ['Ctrl + B', '在当前拍添加书签'], ['Ctrl + A', '选择当前类别中视野内的对象'], ['Delete', '悬停书签时删除书签；否则优先删除选中项，再删除鼠标下对象'], ['Q', '切换红蓝放置颜色'], ['1 / 2 / 3', '切换音符 / 障碍物 / 灯光'], ['按住 Shift', '暂时禁止放置（保留多选与相机控制）'], ['← / →', '前后移动一个吸附单位'], ['Shift + 点击', '多选'], ['拖动时间轴音符', '移动节拍和位置'], ['Alt + 拖动手部音符', '更改击打方向'], ['时间轴 Alt + 拖动脚部', '调整持续时长'], ['鼠标中键', '切换类型 0 / 1'], ['时间轴右键', '删除音符'], ['3D 右键拖动 / WASD', '旋转 / 移动相机'], ['3D 滚轮', '向上前进 / 向下后退，可在设置反向'], ['3D 右键 + Shift / 空格', '降低 / 升高相机'], ['3D Alt + 滚轮', '调整纵深；鼠标指向脚部音符时，向上加长 / 向下缩短一个吸附单位；0 拍转为短音符'], ['3D Alt + 左键拖动', '拖动音符到对应轨道的其他位置'], ['3D Alt + 点击', '直接选中与圆环重叠的已有音符'], ['3D ＋ / −', '拉近 / 拉远相机'], ['Ctrl + 滚轮', '切换 SNAP 预设'], ['双击组内音符', '选中整个组']].map(([k, v]) => `<div><kbd>${k}</kbd><span>${v}</span></div>`).join('')}</div><p class="field-help">源文件保存前自动备份到 .ringmapper-backups。浏览器会保存最近一次工作草稿；本工具不连接官方账号。</p>`),
 };
 app.addEventListener('click', e => {
   const el = (e.target as HTMLElement).closest<HTMLElement>('button'); if (!el) return;
@@ -779,6 +803,15 @@ let pointerPosition: { x: number; y: number } | undefined;
 window.addEventListener('pointermove', e => { pointerPosition = { x: e.clientX, y: e.clientY }; }, { capture: true });
 window.addEventListener('pointerdown', e => { pointerPosition = { x: e.clientX, y: e.clientY }; }, { capture: true });
 window.addEventListener('pointerout', e => { if (!e.relatedTarget) pointerPosition = undefined; });
+function deleteHoveredBookmark() {
+  if (!pointerPosition) return false;
+  const mark = document.elementFromPoint(pointerPosition.x, pointerPosition.y)?.closest<HTMLElement>('[data-bookmark]');
+  if (!mark) return false;
+  const index = Number(mark.dataset.bookmark), bookmarks = project.chart.customData?.bookmarks;
+  if (!Number.isInteger(index) || !bookmarks?.[index]) return false;
+  mutate(() => { bookmarks.splice(index, 1); });
+  return true;
+}
 function deleteHovered() {
   if (!pointerPosition) return false;
   const target = document.elementFromPoint(pointerPosition.x, pointerPosition.y);
@@ -840,6 +873,20 @@ toolsHandle.addEventListener('pointercancel', () => { toolsDrag = undefined; });
 toolsHandle.addEventListener('dblclick', () => { toolsPanel.removeAttribute('style'); });
 new ResizeObserver(() => { if (toolsPanel.style.left) positionTools(toolsPanel.offsetLeft, toolsPanel.offsetTop); }).observe(preview);
 $('camera-reset').addEventListener('click', () => spatialPreview?.resetCamera());
+function setLibraryCollapsed(collapsed: boolean) {
+  document.documentElement.classList.toggle('library-collapsed', collapsed);
+  $('song-library').inert = collapsed;
+  $('song-library').setAttribute('aria-hidden', String(collapsed));
+  const button = $('toggle-library'), label = collapsed ? '展开歌曲列表' : '收起歌曲列表';
+  button.setAttribute('aria-expanded', String(!collapsed)); button.setAttribute('aria-label', label); button.title = label;
+  button.querySelector('b')!.textContent = collapsed ? '›' : '‹';
+}
+try { setLibraryCollapsed(localStorage.getItem('ringmapper-library-collapsed') === 'true'); } catch {}
+$('toggle-library').onclick = () => {
+  const collapsed = !document.documentElement.classList.contains('library-collapsed');
+  setLibraryCollapsed(collapsed);
+  try { localStorage.setItem('ringmapper-library-collapsed', String(collapsed)); } catch {}
+};
 // Mouse-operated controls return keyboard focus to the editor; text entry stays local.
 function focusEditor() { if (!$<HTMLDialogElement>('modal').open) preview.focus({ preventScroll: true }); }
 app.addEventListener('click', e => {
@@ -860,7 +907,7 @@ window.addEventListener('keydown', e => {
   if (target.matches('select') && e.code !== 'Space') return;
   if (e.ctrlKey || e.metaKey) { const key = e.key.toLowerCase(); if (key === 'c' && window.getSelection()?.toString()) return; if (['s', 'z', 'y', 'c', 'v', 'a', 'b', 'f'].includes(key)) e.preventDefault(); if (key === 's') void saveProject(); if (key === 'z') undo(e.shiftKey); if (key === 'y') undo(true); if (key === 'c') copy(); if (key === 'v') paste(); if (key === 'a') select(spatialPreview?.visibleSelections() ?? []); if (key === 'b' && !e.repeat) addBookmark(); if (key === 'f' && !e.repeat) mirror('left-right'); return; }
   if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) { focusEditor(); void togglePlay(); } }
-  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); if (!e.repeat && !spatialDrag && !drag && !selectionBox) { if (selected.length) removeSelected(); else deleteHovered(); } }
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); if (!e.repeat && !spatialDrag && !drag && !selectionBox) { if (!deleteHoveredBookmark()) { if (selected.length) removeSelected(); else deleteHovered(); } } }
   if (!e.altKey && !e.shiftKey && ['1', '2', '3'].includes(e.key)) { e.preventDefault(); setMode((['notes', 'obstacles', 'events'] as const)[Number(e.key) - 1]); }
   if (e.key.toLowerCase() === 'q' && !e.altKey && !e.repeat) { e.preventDefault(); togglePlacementColor(); }
   if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setBeat(snap(beat + (e.key === 'ArrowRight' ? 1 : -1) / division, division)); }

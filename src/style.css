@@ -510,3 +510,9 @@ dialog.tutorial-dialog { width: min(960px, calc(100vw - var(--sidebar) - 40px));
 
 #tutorial.tutorial-unseen { color: #ffb45e; border-color: #e58a32; background: #7a3c153d; }
 #tutorial.tutorial-unseen:hover { background: #a6522466; }
+
+:root.library-collapsed { --sidebar: 0px; }
+.library-collapsed .library { visibility: hidden; border: 0; }
+.library-toggle { position: fixed; z-index: 20; left: max(0px, calc(var(--sidebar) - 1px)); top: calc(50% - 38px); width: 24px; height: 76px; padding: 6px 2px; flex-direction: column; gap: 2px; border-radius: 0 7px 7px 0; background: #1c2b30f2; border-color: #456355; box-shadow: 3px 2px 12px #0004; }
+.library-toggle b { font-size: 22px; line-height: 20px; }
+.library-toggle span { writing-mode: vertical-rl; font-size: 10px; letter-spacing: 2px; }

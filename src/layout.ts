@@ -1,7 +1,7 @@
 ﻿import type { Item } from './model';
 
 export const defaultDepthScale = 10;
-export const defaultPreviewRange = 3;
+export const defaultPreviewRange = 4;
 // Dominant native obstacle duration: 27,015 of 35,587 walls in the bundled maps.
 export const defaultObstacleDuration = .04;
 
