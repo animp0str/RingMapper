@@ -2,6 +2,11 @@ import { test, expect, type Page } from '@playwright/test';
 import JSZip from 'jszip';
 import { newProject, writeYaml } from '../../src/model';
 
+async function blankEditor(page: Page) {
+  await page.goto('/'); await expect(page.locator('#song-name')).toHaveText('Diabolic Swing');
+  await page.locator('#new-project').click(); await page.locator('#apply-settings').click();
+}
+
 async function localSong(page: Page) {
   const p = newProject(); p.info.songName = 'Regression song';
   const entries = p.info.difficultyCiphermapSets[0].difficultyCiphermaps;
@@ -54,9 +59,10 @@ test('switching clean difficulties stays saved; actual edits survive switching, 
 });
 
 test('uppercase ZIP song packs import through audio picker; plain audio ZIP is attached to current song', async ({ page }) => {
-  await page.goto('/'); const p = newProject(); p.info.songName = 'ZIP song';
+  await blankEditor(page); const p = newProject(); p.info.songName = 'ZIP song';
   const zip = new JSZip().file('Song/Info.yaml', writeYaml(p.info)).file('Song/' + p.chartPath, writeYaml(p.chart)).file('Song/' + p.eventPath, writeYaml(p.event));
   await page.locator('#audio-input').setInputFiles({ name: 'SONG.ZIP', mimeType: 'application/zip', buffer: await zip.generateAsync({ type: 'nodebuffer' }) });
+  await page.locator('#discard').click();
   await expect(page.locator('#song-name')).toHaveText('ZIP song');
   const audio = new JSZip().file('audio/test.wav', Buffer.from('RIFF test audio'));
   await page.locator('#audio-input').setInputFiles({ name: 'audio.ZIP', mimeType: 'application/zip', buffer: await audio.generateAsync({ type: 'nodebuffer' }) });
@@ -64,7 +70,7 @@ test('uppercase ZIP song packs import through audio picker; plain audio ZIP is a
 });
 
 test('passed notes disappear immediately, long foot notes remain until their end, and seeking restores geometry', async ({ page }) => {
-  await page.goto('/'); const p = newProject(); p.chart.notes = [{ time: 1, lineIndex: 0, lineLayer: 0, type: 0, cutDirection: 8 }]; p.chart.ringNotes = [{ time: 1, lineIndex: 0, type: 0, ringNoteType: 0 }, { time: 1, lineIndex: 35, type: 1, ringNoteType: 1, duration: 1 }];
+  await blankEditor(page); const p = newProject(); p.chart.notes = [{ time: 1, lineIndex: 0, lineLayer: 0, type: 0, cutDirection: 8 }]; p.chart.ringNotes = [{ time: 1, lineIndex: 0, type: 0, ringNoteType: 0 }, { time: 1, lineIndex: 35, type: 1, ringNoteType: 1, duration: 1 }];
   const zip = new JSZip().file('Info.yaml', writeYaml(p.info)).file(p.chartPath, writeYaml(p.chart)).file(p.eventPath, writeYaml(p.event));
   await page.locator('#import-input').setInputFiles({ name: 'notes.ZIP', mimeType: 'application/zip', buffer: await zip.generateAsync({ type: 'nodebuffer' }) });
   const counts = () => page.locator('#preview').evaluate((el: HTMLCanvasElement) => ['hand-notes', 'foot-notes'].map(name => (el.spatialPreview!.scene.getObjectByName(name) as import('three').InstancedMesh).count));
@@ -74,7 +80,7 @@ test('passed notes disappear immediately, long foot notes remain until their end
 
 
 test('pause snaps the current playhead in either direction and rapid virtual toggles do not accumulate progress', async ({ page }) => {
-  await page.goto('/');
+  await blankEditor(page);
   const togglePair = async (at: number, count = 1) => page.evaluate(({ at, count }) => {
     const seek = document.querySelector<HTMLInputElement>('#seek')!;
     seek.value = String(at); seek.dispatchEvent(new Event('input', { bubbles: true }));
@@ -106,7 +112,7 @@ test('pending audio play requests can be paused and stale promises cannot restar
       return audio;
     };
   });
-  await page.goto('/');
+  await blankEditor(page);
   await page.locator('#audio-input').setInputFiles({ name: 'test.wav', mimeType: 'audio/wav', buffer: silentWave() });
   await expect.poll(() => page.evaluate(() => (window as any).__audio.readyState)).toBeGreaterThanOrEqual(1);
   await page.evaluate(() => { const input = document.querySelector<HTMLInputElement>('#seek')!; input.value = '2.14'; input.dispatchEvent(new Event('input')); });
@@ -124,7 +130,7 @@ test('pending audio play requests can be paused and stale promises cannot restar
 });
 
 test('hovered bookmark deletion is undoable and does not delete selected notes or consume text editing', async ({ page }) => {
-  await page.goto('/'); await page.locator('#add-at-beat').click(); await page.keyboard.press('Control+a');
+  await blankEditor(page); await page.locator('#add-at-beat').click(); await page.keyboard.press('Control+a');
   await page.keyboard.press('Control+b'); await expect(page.locator('.seek-bookmark')).toHaveCount(1);
   await page.locator('.seek-bookmark').hover(); await page.keyboard.press('Delete');
   await expect(page.locator('.seek-bookmark')).toHaveCount(0); await expect(page.locator('#note-count')).toHaveText('1');

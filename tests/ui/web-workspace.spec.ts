@@ -9,7 +9,7 @@ emptyTest('static first visit and unsupported browser can import, edit and expor
   page.on('request', r => { if (r.url().includes('/api/') || r.method() !== 'GET') network.push(r.method() + ' ' + r.url()); });
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => { (window as any).showDirectoryPicker = undefined; });
-  await page.goto('/'); await expect(page.locator('.empty-library')).toContainText('打开本地 Map');
+  await page.goto('/'); await expect(page.locator('#song-name')).toHaveText('Diabolic Swing'); await expect(page.locator('.empty-library')).toContainText('打开本地 Map');
   await expect(page.locator('#workspace-name')).toHaveText('尚未选择目录');
   await page.locator('#workspace-folder').click(); await expect(page.locator('#toast')).toContainText('不支持');
   const zip = new JSZip();
@@ -35,10 +35,10 @@ test('cancelled directory selection preserves edits; revoked permission can be r
     (FileSystemHandle.prototype as any).queryPermission = async () => 'prompt';
     (FileSystemHandle.prototype as any).requestPermission = async () => 'denied';
   });
-  await page.reload(); await expect(page.locator('#workspace-authorize')).toBeVisible(); await expect(page.locator('.song-card')).toHaveCount(0);
+  await page.reload(); await expect(page.locator('#workspace-authorize')).toBeVisible(); await expect(page.locator('.song-card[data-song]')).toHaveCount(0);
   await page.locator('#workspace-authorize').click(); await expect(page.locator('#toast')).toContainText('未获得读取权限');
   await page.evaluate(() => { (FileSystemHandle.prototype as any).requestPermission = async () => 'granted'; });
-  await page.locator('#workspace-authorize').click(); await expect(page.locator('.song-card')).toHaveCount(2);
+  await page.locator('#workspace-authorize').click(); await expect(page.locator('.song-card[data-song]')).toHaveCount(2);
   await expect(page.locator('#workspace-authorize')).toBeHidden();
 });
 
@@ -92,7 +92,7 @@ test('empty folders, refresh and switching back preserve folder identity; cancel
   await page.goto('/'); await expect(page.locator('#song-name')).toHaveText('曹操');
   await page.locator('#workspace-folder').click(); await expect(page.locator('#workspace-name')).toHaveText('Map');
   await page.evaluate(() => { (window as any).showDirectoryPicker = async () => (await navigator.storage.getDirectory()).getDirectoryHandle('EmptyMap', { create: true }); });
-  await page.locator('#workspace-folder').click(); await expect(page.locator('#workspace-name')).toHaveText('EmptyMap'); await expect(page.locator('.song-card')).toHaveCount(0);
+  await page.locator('#workspace-folder').click(); await expect(page.locator('#workspace-name')).toHaveText('EmptyMap'); await expect(page.locator('.song-card[data-song]')).toHaveCount(0);
   await page.locator('#workspace-refresh').click(); await expect(page.locator('#toast')).toContainText('已刷新');
   await page.evaluate(() => { (window as any).showDirectoryPicker = async () => (await navigator.storage.getDirectory()).getDirectoryHandle('Map'); });
   await page.locator('#workspace-folder').click(); await expect(page.locator('#song-name')).toHaveText('曹操');
