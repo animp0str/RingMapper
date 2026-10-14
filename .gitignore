@@ -1,5 +1,6 @@
 ﻿node_modules/
-dist/
+dist/*
+!dist/changelog.json
 .ringmapper-backups/
 playwright-report/
 test-results/
