@@ -9,7 +9,7 @@ import { handPositions, handLane, handAngle, handWorldPosition, footX, noteDepth
 declare global { interface HTMLCanvasElement { spatialPreview?: SpatialPreview } }
 
 export type PreviewHit = { kind: Kind; lineIndex: number; lineLayer: number; index?: number; obstacleType?: 0 | 1; time?: number };
-type Instance = { position: THREE.Vector3; scale?: THREE.Vector3; rotation?: THREE.Quaternion; color: THREE.Color; hit?: PreviewHit };
+type Instance = { position: THREE.Vector3; scale?: THREE.Vector3; rotation?: THREE.Quaternion; color: THREE.Color; hit?: PreviewHit; passed?: boolean };
 const handColors = [new THREE.Color('#ff1744'), new THREE.Color('#1261ff')];
 const amber = new THREE.Color('#e9b56e');
 const matrix = new THREE.Matrix4(), quaternion = new THREE.Quaternion(), unit = new THREE.Vector3(1, 1, 1);
@@ -86,6 +86,8 @@ export class SpatialPreview {
   private quickGroup = document.createElement('button');
   private quickJoin = document.createElement('button');
   private quickFill = document.createElement('button');
+  retainPassed = true;
+  passedOpacity = .05;
   handOpacity = 1;
   footOpacity = 1;
   lookAhead = defaultPreviewRange;
@@ -99,6 +101,9 @@ export class SpatialPreview {
   private handBatch: InstanceBatch;
   private footBatch: InstanceBatch;
   private tailBatch: InstanceBatch;
+  private passedHandBatch: InstanceBatch;
+  private passedFootBatch: InstanceBatch;
+  private passedTailBatch: InstanceBatch;
   private wallBatch: InstanceBatch;
   private wallWireBatch: InstanceBatch;
   ringOpacity = .22;
@@ -133,6 +138,10 @@ export class SpatialPreview {
     this.handBatch.mesh.scale.x = stage.ringScaleX;
     this.footBatch = new InstanceBatch(this.noteRoot, new THREE.BoxGeometry(footNoteSize.width, footNoteSize.height, footNoteSize.depth), new THREE.MeshStandardMaterial({ roughness: .85, metalness: 0 }), 'foot-notes');
     this.tailBatch = new InstanceBatch(this.noteRoot, new THREE.BoxGeometry(footNoteSize.width, .055, 1), new THREE.MeshStandardMaterial({ transparent: true, opacity: .5, roughness: .85, metalness: 0, depthWrite: false }), 'foot-holds');
+    this.passedHandBatch = new InstanceBatch(this.noteRoot, this.handBatch.geometry, this.handBatch.material.clone(), 'passed-hand-notes');
+    this.passedHandBatch.mesh.scale.x = stage.ringScaleX;
+    this.passedFootBatch = new InstanceBatch(this.noteRoot, this.footBatch.geometry, this.footBatch.material.clone(), 'passed-foot-notes');
+    this.passedTailBatch = new InstanceBatch(this.noteRoot, this.tailBatch.geometry, this.tailBatch.material.clone(), 'passed-foot-holds');
     this.wallBatch = new InstanceBatch(this.noteRoot, new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ transparent: true, opacity: .13, depthWrite: false, side: THREE.DoubleSide }), 'obstacles');
     this.wallWireBatch = new InstanceBatch(this.noteRoot, new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ wireframe: true, transparent: true, opacity: .6, depthWrite: false }), 'obstacle-edges');
     this.controls = new OrbitControls(this.camera, canvas);
@@ -144,7 +153,7 @@ export class SpatialPreview {
     this.controls.enableZoom = false; this.controls.enablePan = false;
     this.controls.addEventListener('change', this.render);
     this.hud = document.createElement('div'); this.hud.className = 'preview-hud'; this.hud.setAttribute('aria-live', 'off');
-    this.hud.innerHTML = '<span class="preview-beat">BEAT 0.00</span>';
+    this.hud.innerHTML = '';
     this.annotations.className = 'scene-annotations'; this.quickGroup.id = 'quick-group'; this.quickGroup.textContent = '＋ 打组'; this.quickGroup.hidden = true;
     this.quickGroup.onclick = () => this.canvas.dispatchEvent(new CustomEvent('group-selection', { bubbles: true, detail: { action: this.quickGroup.dataset.action } }));
     this.quickJoin.id = 'quick-join-group'; this.quickJoin.textContent = '加入组'; this.quickJoin.hidden = true;
@@ -258,12 +267,15 @@ export class SpatialPreview {
   }
   setNoteOpacity(hand: number, foot: number) {
     this.handOpacity = THREE.MathUtils.clamp(hand, 0, 1); this.footOpacity = THREE.MathUtils.clamp(foot, 0, 1);
-    for (const [batch, opacity] of [[this.handBatch, this.handOpacity], [this.footBatch, this.footOpacity], [this.tailBatch, this.footOpacity * .5]] as const) {
+    for (const [batch, opacity] of [[this.handBatch, this.handOpacity], [this.footBatch, this.footOpacity], [this.tailBatch, this.footOpacity * .5], [this.passedHandBatch, Math.min(this.handOpacity, this.passedOpacity)], [this.passedFootBatch, Math.min(this.footOpacity, this.passedOpacity)], [this.passedTailBatch, Math.min(this.footOpacity, this.passedOpacity) * .5]] as const) {
       const material = batch.material;
       material.opacity = opacity; material.transparent = opacity < 1; material.depthWrite = opacity === 1; material.needsUpdate = true;
     }
-    for (const label of this.footLabels) (label.mesh.material as THREE.Material).opacity = this.footOpacity;
-    this.render();
+    if (this.state) this.update(this.state); else this.render();
+  }
+  setPassedNotes(enabled: boolean, opacity: number) {
+    this.retainPassed = enabled; this.passedOpacity = THREE.MathUtils.clamp(opacity, 0, 1);
+    this.setNoteOpacity(this.handOpacity, this.footOpacity);
   }
   setRingOpacity(opacity: number) {
     this.ringOpacity = THREE.MathUtils.clamp(opacity, 0, 1);
@@ -288,6 +300,7 @@ export class SpatialPreview {
     this.footLabels.forEach((label, i) => {
       const note = feet[i]; label.active = !!note; label.mesh.visible = !!note; if (!note) return;
       label.mesh.position.copy(note.position); label.mesh.position.y += .30; label.mesh.position.z += .1; label.mesh.userData.index = note.hit!.index;
+      (label.mesh.material as THREE.Material).opacity = note.passed ? Math.min(this.footOpacity, this.passedOpacity) : this.footOpacity;
       const track = footTrack(note.hit!.lineIndex); label.mesh.userData.track = track;
       if (track === label.track) return; label.track = track;
       const c = label.canvas.getContext('2d')!; c.clearRect(0, 0, 256, 128); c.font = 'bold 86px Consolas, monospace'; c.textAlign = 'center'; c.textBaseline = 'middle';
@@ -299,7 +312,7 @@ export class SpatialPreview {
     const xy = kind === 'notes' ? handWorldPosition(n.lineIndex, n.lineLayer, this.state!.ringRotation, this.state!.ringReverse) : kind === 'ringNotes' ? { x: footX(n.lineIndex), y: stage.footY + .15 } : obstacleBounds(n);
     if (!xy) return undefined;
     const z = noteDepth(n.time, this.state!.beat, this.beatSpacing);
-    return new THREE.Vector3(xy.x, xy.y, kind !== 'notes' && Number(n.duration) > 0 ? Math.min(0, z) : z);
+    return new THREE.Vector3(xy.x, xy.y, kind !== 'notes' && Number(n.duration) > 0 && this.state!.beat <= n.time + Number(n.duration) ? Math.min(0, z) : z);
   }
   private updateSelection(state: ViewState, hands: Instance[], feet: Instance[], walls: Instance[]) {
     const refs = state.selections ?? [], selected = new Set(refs.map(s => `${s.kind}:${s.index}`));
@@ -338,7 +351,7 @@ export class SpatialPreview {
     }
     for (const overlap of state.overlaps) {
       const note = items(state.project, overlap.kind)[overlap.indices[0]], dt = note.time - state.beat;
-      if (dt > this.lookAhead || dt + (overlap.kind === 'notes' || (overlap.kind === 'ringNotes' && note.ringNoteType !== 1) ? 0 : Number(note.duration ?? 0)) < 0) continue;
+      if (dt > this.lookAhead || (!this.retainPassed || overlap.kind === 'obstacles') && dt + (overlap.kind === 'notes' || (overlap.kind === 'ringNotes' && note.ringNoteType !== 1) ? 0 : Number(note.duration ?? 0)) < 0) continue;
       const center = this.itemCenter(overlap.kind, note);
       if (center) addMarker(`! beat ${Number(note.time.toFixed(5))} 音符重叠`, 'overlap-marker', center, -34);
     }
@@ -352,7 +365,8 @@ export class SpatialPreview {
     const groups = new Map<string, { time: number; position: THREE.Vector3 }[]>();
     for (const kind of ['notes', 'ringNotes', 'obstacles'] as const) items(state.project, kind).forEach((n, index) => {
       const dt = n.time - state.beat, duration = Number(n.duration ?? 0);
-      if (dt > this.lookAhead || dt + (kind === 'notes' || (kind === 'ringNotes' && n.ringNoteType !== 1) ? 0 : duration) < 0) return;
+      const passed = dt + (kind === 'notes' || (kind === 'ringNotes' && n.ringNoteType !== 1) ? 0 : duration) < 0;
+      if (dt > this.lookAhead || passed && (!this.retainPassed || kind === 'obstacles')) return;
       const hit: PreviewHit = { kind, index, lineIndex: n.lineIndex, lineLayer: n.lineLayer ?? 0 };
       const color = n.type === 3 ? new THREE.Color('#c398eb') : handColors[n.type === 1 ? 1 : 0];
       if (kind === 'notes') {
@@ -360,25 +374,28 @@ export class SpatialPreview {
         const position = new THREE.Vector3(pos.x, pos.y, noteDepth(n.time, state.beat, this.beatSpacing));
         // R = rotation around the ring center, then X scale to match the elliptical target ring.
         const angle = handAngle(handLane(n.lineIndex, n.lineLayer), state.ringRotation, state.ringReverse);
-        hands.push({ position: new THREE.Vector3(0, stage.ringY, position.z), color, hit,
+        hands.push({ passed, position: new THREE.Vector3(0, stage.ringY, position.z), color, hit,
           rotation: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), angle) });
-        if (n.groupId) { const list = groups.get(n.groupId) ?? []; list.push({ time: n.time, position }); groups.set(n.groupId, list); }
+        if (n.groupId && !passed) { const list = groups.get(n.groupId) ?? []; list.push({ time: n.time, position }); groups.set(n.groupId, list); }
       } else if (kind === 'ringNotes') {
         const hold = n.ringNoteType === 1;
-        const z = hold ? Math.min(0, noteDepth(n.time, state.beat, this.beatSpacing)) : noteDepth(n.time, state.beat, this.beatSpacing);
-        feet.push({ position: new THREE.Vector3(footX(n.lineIndex), stage.footY, z), color, hit });
+        const z = hold && !passed ? Math.min(0, noteDepth(n.time, state.beat, this.beatSpacing)) : noteDepth(n.time, state.beat, this.beatSpacing);
+        feet.push({ passed, position: new THREE.Vector3(footX(n.lineIndex), stage.footY, z), color, hit });
         if (hold && duration > 0) {
-          const extent = durationExtent(n, state.beat, this.beatSpacing);
-          tails.push({ position: new THREE.Vector3(footX(n.lineIndex), stage.footY, extent.center), scale: new THREE.Vector3(1, 1, extent.length), color, hit });
+          const extent = passed ? {
+            center: noteDepth(n.time + duration / 2, state.beat, this.beatSpacing), length: Math.max(.035, duration * this.beatSpacing)
+          } : durationExtent(n, state.beat, this.beatSpacing);
+          tails.push({ passed, position: new THREE.Vector3(footX(n.lineIndex), stage.footY, extent.center), scale: new THREE.Vector3(1, 1, extent.length), color, hit });
         }
       } else {
         const extent = durationExtent(n, state.beat, this.beatSpacing), bounds = obstacleBounds(n);
         walls.push({ position: new THREE.Vector3(bounds.x, bounds.y, extent.center), scale: new THREE.Vector3(bounds.width, bounds.height, extent.length), color: amber, hit });
       }
     });
-    this.handBatch.sync(hands); this.footBatch.sync(feet); this.tailBatch.sync(tails); this.wallBatch.sync(walls); this.wallWireBatch.sync(walls);
+    this.handBatch.sync(hands.filter(n => !n.passed)); this.footBatch.sync(feet.filter(n => !n.passed)); this.tailBatch.sync(tails.filter(n => !n.passed));
+    this.passedHandBatch.sync(hands.filter(n => n.passed)); this.passedFootBatch.sync(feet.filter(n => n.passed)); this.passedTailBatch.sync(tails.filter(n => n.passed)); this.wallBatch.sync(walls); this.wallWireBatch.sync(walls);
     this.lighting.update(state, this.beatSpacing, this.lookAhead);
-    this.updateGroupAppearance(state, hands);
+    this.updateGroupAppearance(state, hands.filter(n => !n.passed));
     this.updateFootLabels(feet); this.updateSelection(state, hands, feet, walls);
     const links: THREE.Vector3[] = [];
     for (const list of groups.values()) { list.sort((a, b) => a.time - b.time); for (let i = 1; i < list.length; i++) links.push(list[i - 1].position, list[i].position); }
@@ -401,7 +418,6 @@ export class SpatialPreview {
     this.floorGrid.scale.z = Math.max(1, depth / 40); this.floorGrid.position.z = this.floor.position.z;
     const fog = this.scene.fog as THREE.Fog; fog.far = Math.max(43, this.lookAhead * this.beatSpacing + 15); fog.near = Math.max(20, fog.far * .48);
     this.camera.far = Math.max(100, depth + this.camera.position.length() + 50); this.camera.updateProjectionMatrix();
-    this.hud.querySelector('.preview-beat')!.textContent = `BEAT ${state.beat.toFixed(2)} · 未来 ${Number(this.lookAhead.toFixed(2))} 拍`;
     this.canvas.dataset.visibleNotes = String(hands.length + feet.length); this.render();
   }
   private replaceLines(lines: THREE.LineSegments, points: THREE.Vector3[]) {
@@ -458,7 +474,7 @@ export class SpatialPreview {
   }
   visibleSelections(): Selection[] {
     if (!this.state) return [];
-    const candidates = this.state.mode === 'events' ? this.lighting.visibleRecords() : (this.state.mode === 'obstacles' ? [this.wallBatch] : [this.handBatch, this.footBatch]).flatMap(batch => batch.records.flatMap(record => {
+    const candidates = this.state.mode === 'events' ? this.lighting.visibleRecords() : (this.state.mode === 'obstacles' ? [this.wallBatch] : [this.handBatch, this.footBatch, this.passedHandBatch, this.passedFootBatch]).flatMap(batch => batch.records.flatMap(record => {
       const hit = record.hit!; const position = this.itemCenter(hit.kind, items(this.state!.project, hit.kind)[hit.index!]);
       return position ? [{ ref: { kind: hit.kind, index: hit.index! }, position }] : [];
     }));
@@ -508,7 +524,7 @@ export class SpatialPreview {
     const mode = this.state?.mode ?? 'notes';
     if (mode === 'events') return this.lighting.pick(this.raycaster, layer);
     const targets = mode === 'obstacles' ? [...this.wallAreaTargets, ...this.obstacleTargets] : mode === 'notes' ? this.targets : [];
-    const noteMeshes = (mode === 'obstacles' ? [this.wallBatch] : mode === 'notes' ? [this.handBatch, this.footBatch, this.tailBatch, this.wallBatch] : []).map(b => b.mesh);
+    const noteMeshes = (mode === 'obstacles' ? [this.wallBatch] : mode === 'notes' ? [this.handBatch, this.footBatch, this.tailBatch, this.passedHandBatch, this.passedFootBatch, this.passedTailBatch, this.wallBatch] : []).map(b => b.mesh);
     const hits = layer === 'targets' ? this.raycaster.intersectObjects(targets, false) : this.raycaster.intersectObjects(noteMeshes, false);
     if (layer === 'all') hits.push(...this.raycaster.intersectObjects(targets, false));
     for (const hit of hits) {
@@ -585,7 +601,7 @@ export class SpatialPreview {
   private keyUp = (e: KeyboardEvent) => { this.keys.delete(e.key.toLowerCase()); };
   private clearKeys = () => { this.keys.clear(); this.rightHeld = false; };
   private contextLost = (e: Event) => { e.preventDefault(); this.lost = true; this.canvas.dataset.renderer = 'context-lost'; this.hud.textContent = '3D 上下文暂时丢失，等待浏览器恢复'; };
-  private contextRestored = () => { this.lost = false; this.canvas.dataset.renderer = 'webgl'; this.hud.innerHTML = '<span class="preview-beat"></span>'; if (this.state) this.update(this.state); };
+  private contextRestored = () => { this.lost = false; this.canvas.dataset.renderer = 'webgl'; this.hud.innerHTML = ''; if (this.state) this.update(this.state); };
   dispose() {
     delete this.canvas.spatialPreview;
     this.disposed = true; this.controls.removeEventListener('change', this.render); this.controls.dispose();

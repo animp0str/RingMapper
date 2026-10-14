@@ -62,8 +62,8 @@ test('ZIP import preserves additional fields and event files', async ({ page }) 
   await page.goto('/'); await expect(page.locator('#song-name')).toHaveText('曹操'); await unitDepth(page);
   await page.locator('#import-input').setInputFiles({ name: 'import.zip', mimeType: 'application/zip', buffer: await zip.generateAsync({ type: 'nodebuffer' }) });
   await expect(page.locator('#song-name')).toHaveText('Imported'); await page.locator('#beat-input').fill('1.125'); await page.locator('#beat-input').dispatchEvent('change');
-  await page.locator('[data-chart="Ring/HardRing.yaml"]').click(); await expect(page.locator('#source-path')).toHaveText('Ring/HardRing.yaml');
-  await page.locator('[data-chart="Ring/NormalRing.yaml"]').click(); await expect(page.locator('#source-path')).toHaveText('Ring/NormalRing.yaml');
+  await page.locator('[data-chart="Ring/HardRing.yaml"]').click(); await expect(page.locator('#scene-workspace')).toHaveAttribute('data-current-chart', 'Ring/HardRing.yaml');
+  await page.locator('[data-chart="Ring/NormalRing.yaml"]').click(); await expect(page.locator('#scene-workspace')).toHaveAttribute('data-current-chart', 'Ring/NormalRing.yaml');
   const d = page.waitForEvent('download'); await page.locator('#export').click(); const download = await d; const exported = await JSZip.loadAsync(await fs.readFile((await download.path())!));
   const chart = parse(await exported.file('Ring/NormalRing.yaml')!.async('string')); expect(chart.notes[0].customMarker).toBe('keep'); expect(chart.notes[0].time).toBe(1.125);
   const event = parse(await exported.file('Ring/NormalRingEvent.yaml')!.async('string')); expect(event.events[0].type).toBe(101);

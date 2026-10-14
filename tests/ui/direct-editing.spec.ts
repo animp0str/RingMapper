@@ -19,7 +19,7 @@ async function clickHand(page: Page, col: number, row: number) { const p = await
 test('signed foot labels, centered camera, opacity slider and illustrated mirror buttons replace obsolete controls', async ({ page }) => {
   await fresh(page);
   await expect(page.locator('#camera-preset, #ring-rotation, #toggle-color, [data-tool]')).toHaveCount(0);
-  await expect(page.locator('.preview-hud')).not.toContainText('WEBGL'); await expect(page.locator('.preview-beat')).toContainText('BEAT');
+  await expect(page.locator('.preview-hud')).not.toContainText('WEBGL'); await expect(page.locator('.preview-beat')).toHaveCount(0);
   expect(await page.locator('[data-mode]').allTextContents()).toEqual(['音符', '障碍物', '灯光事件']);
   const camera = await page.locator('#preview').evaluate((el: HTMLCanvasElement) => ({ x: el.spatialPreview!.camera.position.x, y: el.spatialPreview!.camera.position.y, targetY: el.spatialPreview!.controls.target.y }));
   expect(camera.x).toBeCloseTo(0); expect(camera.y).toBeGreaterThan(camera.targetY + 3);
@@ -98,7 +98,7 @@ test('obstacle mode exposes four ground tracks, places only walls, and preserves
 
 test('the second original Caocao RingDance Hard obstacle renders as an upper half wall', async ({ page }) => {
   await page.goto('/'); await expect(page.locator('#song-name')).toHaveText('曹操');
-  await page.locator('[data-chart="RingDance/HardRingDance.yaml"]').click(); await expect(page.locator('#source-path')).toHaveText('RingDance/HardRingDance.yaml');
+  await page.locator('[data-chart="RingDance/HardRingDance.yaml"]').click(); await expect(page.locator('#scene-workspace')).toHaveAttribute('data-current-chart', 'RingDance/HardRingDance.yaml');
   await page.locator('[data-mode="obstacles"]').click(); await page.locator('#beat-input').fill('5'); await page.locator('#beat-input').dispatchEvent('change');
   const wall = await page.locator('#preview').evaluate((el: HTMLCanvasElement) => { const mesh = el.spatialPreview!.scene.getObjectByName('obstacles') as import('three').InstancedMesh; const index = mesh.userData.batch.records.findIndex((r: any) => r.hit.index === 1), a = mesh.instanceMatrix.array; return { index, y: a[index * 16 + 13], height: a[index * 16 + 5] }; });
   expect(wall.index).toBeGreaterThanOrEqual(0); expect(wall.height).toBeCloseTo(1.55); expect(wall.y - wall.height / 2).toBeCloseTo(1.7);

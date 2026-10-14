@@ -16,9 +16,9 @@ test('empty difficulties create the exact mode and rank; folder button selects a
   const empty = page.locator('[data-create-mode="RingDance"][data-create-difficulty="Expert"]');
   await expect(empty).toHaveClass(/difficulty-empty/); await empty.click();
   await expect(page.locator('#new-mode')).toHaveValue('RingDance'); await expect(page.locator('#new-difficulty')).toHaveValue('Expert');
-  await page.locator('#difficulty-create').click(); await expect(page.locator('#source-path')).toHaveText('RingDance/ExpertRingDance.yaml');
+  await page.locator('#difficulty-create').click(); await expect(page.locator('#scene-workspace')).toHaveAttribute('data-current-chart', 'RingDance/ExpertRingDance.yaml');
   await expect(empty).toHaveCount(0); await expect(page.locator('[data-chart="RingDance/ExpertRingDance.yaml"]')).toHaveClass(/active/);
-  await page.locator('[data-chart="Ring/NormalRing.yaml"]').click(); await expect(page.locator('#source-path')).toHaveText('Ring/NormalRing.yaml');
+  await page.locator('[data-chart="Ring/NormalRing.yaml"]').click(); await expect(page.locator('#scene-workspace')).toHaveAttribute('data-current-chart', 'Ring/NormalRing.yaml');
   await page.locator('#new-project').click(); await page.locator('#discard').click(); await page.locator('#apply-settings').click();
   await page.locator('#workspace-folder').click(); await expect(page.locator('#workspace-name')).toHaveText('Map');
 });

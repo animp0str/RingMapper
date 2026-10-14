@@ -47,7 +47,7 @@ test('tutorial attention is cleared only by opening it; custom view bounds persi
 
 test('switching clean difficulties stays saved; actual edits survive switching, saving and reload', async ({ page }) => {
   await localSong(page);
-  for (const name of ['Hard', 'Normal', 'Hard']) { await page.locator(`[data-chart="Ring/${name}Ring.yaml"]`).click(); await expect(page.locator('#source-path')).toHaveText(`Ring/${name}Ring.yaml`); await expect(page.locator('#save-state')).toHaveText('已保存'); }
+  for (const name of ['Hard', 'Normal', 'Hard']) { await page.locator(`[data-chart="Ring/${name}Ring.yaml"]`).click(); await expect(page.locator('#scene-workspace')).toHaveAttribute('data-current-chart', `Ring/${name}Ring.yaml`); await expect(page.locator('#save-state')).toHaveText('已保存'); }
   await page.locator('#add-at-beat').click(); await expect(page.locator('#save-state')).toHaveText('有未保存修改');
   await page.locator('[data-chart="Ring/NormalRing.yaml"]').click(); await expect(page.locator('#note-count')).toHaveText('0'); await expect(page.locator('#save-state')).toHaveText('有未保存修改');
   await page.locator('[data-chart="Ring/HardRing.yaml"]').click(); await expect(page.locator('#note-count')).toHaveText('1');
@@ -69,8 +69,9 @@ test('uppercase ZIP song packs import through audio picker; plain audio ZIP is a
   await expect(page.locator('#toast')).toContainText('音频已载入'); await expect(page.locator('#song-name')).toHaveText('ZIP song');
 });
 
-test('passed notes disappear immediately, long foot notes remain until their end, and seeking restores geometry', async ({ page }) => {
-  await blankEditor(page); const p = newProject(); p.chart.notes = [{ time: 1, lineIndex: 0, lineLayer: 0, type: 0, cutDirection: 8 }]; p.chart.ringNotes = [{ time: 1, lineIndex: 0, type: 0, ringNoteType: 0 }, { time: 1, lineIndex: 35, type: 1, ringNoteType: 1, duration: 1 }];
+test('passed notes disappear immediately when retention is disabled, long foot notes remain until their end, and seeking restores geometry', async ({ page }) => {
+  await blankEditor(page);
+  await page.locator('#view-settings').click(); await page.locator('#retain-passed').uncheck(); await page.locator('#view-apply').click(); const p = newProject(); p.chart.notes = [{ time: 1, lineIndex: 0, lineLayer: 0, type: 0, cutDirection: 8 }]; p.chart.ringNotes = [{ time: 1, lineIndex: 0, type: 0, ringNoteType: 0 }, { time: 1, lineIndex: 35, type: 1, ringNoteType: 1, duration: 1 }];
   const zip = new JSZip().file('Info.yaml', writeYaml(p.info)).file(p.chartPath, writeYaml(p.chart)).file(p.eventPath, writeYaml(p.event));
   await page.locator('#import-input').setInputFiles({ name: 'notes.ZIP', mimeType: 'application/zip', buffer: await zip.generateAsync({ type: 'nodebuffer' }) });
   const counts = () => page.locator('#preview').evaluate((el: HTMLCanvasElement) => ['hand-notes', 'foot-notes'].map(name => (el.spatialPreview!.scene.getObjectByName(name) as import('three').InstancedMesh).count));
