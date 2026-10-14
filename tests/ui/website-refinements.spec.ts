@@ -149,3 +149,27 @@ test('song library collapses left, expands the canvas and can reopen after reloa
   await page.locator('#toggle-library').click(); await expect(page.locator('#song-library')).toBeVisible(); await expect(page.locator('#toggle-library')).toHaveAttribute('aria-expanded', 'true');
   const restored = await page.locator('#preview').boundingBox(); expect(restored!.width).toBe(before!.width);
 });
+
+
+test('Alt wheel consumes Alt release and keeps Space controlling playback, without capturing Alt in text fields', async ({ page }) => {
+  await blankEditor(page);
+  await page.evaluate(() => {
+    (window as any).__altEvents = [];
+    for (const type of ['keydown', 'keyup']) window.addEventListener(type, e => {
+      const key = e as KeyboardEvent;
+      if (key.key === 'Alt') (window as any).__altEvents.push({ type, prevented: key.defaultPrevented });
+    });
+  });
+  const canvas = page.locator('#preview'), box = (await canvas.boundingBox())!;
+  await canvas.focus(); await page.mouse.move(box.x + box.width / 2, box.y + box.height - 130);
+  const depth = Number(await page.locator('#depth-zoom').inputValue());
+  await page.keyboard.down('Alt'); await page.mouse.wheel(0, -100);
+  await expect(page.locator('#depth-zoom')).toHaveValue(String(depth + 1));
+  await page.keyboard.up('Alt'); await expect(canvas).toBeFocused();
+  expect(await page.evaluate(() => (window as any).__altEvents)).toEqual([{ type: 'keydown', prevented: true }, { type: 'keyup', prevented: true }]);
+  await page.keyboard.press('Space'); await expect(page.locator('#play')).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Space'); await expect(page.locator('#play')).toHaveAttribute('aria-pressed', 'false');
+  await page.locator('#settings').click(); await page.locator('[data-info="songName"]').focus();
+  await page.keyboard.press('Alt');
+  expect((await page.evaluate(() => (window as any).__altEvents)).slice(-2)).toEqual([{ type: 'keydown', prevented: false }, { type: 'keyup', prevented: false }]);
+});

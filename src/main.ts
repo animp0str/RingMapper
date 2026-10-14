@@ -814,6 +814,7 @@ function cycleSnap(delta: number) {
   const next = delta < 0 ? snapPresets.find(n => n > division + 1e-9) ?? 32 : [...snapPresets].reverse().find(n => n < division - 1e-9) ?? 1;
   setSnap(next);
 }
+let editorAltGesture = false;
 let holdWheel = { index: -1, delta: 0, last: 0 };
 preview.addEventListener('wheel', e => {
   e.preventDefault(); preview.focus({ preventScroll: true });
@@ -822,6 +823,7 @@ preview.addEventListener('wheel', e => {
   const delta = e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? preview.clientHeight : 1);
   if (e.ctrlKey) { cycleSnap(delta); return; }
   if (e.altKey) {
+    editorAltGesture = true;
     const { x, y } = canvasPoint(e, preview), hit = spatialPreview?.pick(x, y, 'notes');
     if (spatialDrag) return;
     if (hit?.kind !== 'ringNotes' || hit.index === undefined) { holdWheel.index = -1; setDepthZoom(scale / 48 - delta / 100); return; }
@@ -948,6 +950,26 @@ $('toggle-library').onclick = () => {
 };
 // Mouse-operated controls return keyboard focus to the editor; text entry stays local.
 function focusEditor() { if (!$<HTMLDialogElement>('modal').open) preview.focus({ preventScroll: true }); }
+// Windows Chrome can focus its menu when Alt is released after a mouse gesture.
+// Consume Alt only in the scene; normal text entry and browser key combinations remain available.
+function sceneOwnsKeyboard(target: EventTarget | null) {
+  return !$<HTMLDialogElement>('modal').open && target instanceof HTMLElement &&
+    !target.isContentEditable && !target.matches('input,textarea,select') &&
+    (target === preview || preview.matches(':hover'));
+}
+window.addEventListener('keydown', e => {
+  if (e.key === 'Alt' && sceneOwnsKeyboard(e.target)) {
+    e.preventDefault(); editorAltGesture = true;
+  }
+}, { capture: true });
+preview.addEventListener('pointerdown', e => { if (e.altKey) editorAltGesture = true; });
+window.addEventListener('keyup', e => {
+  if (e.key !== 'Alt' || !editorAltGesture) return;
+  e.preventDefault(); editorAltGesture = false;
+  if (sceneOwnsKeyboard(e.target)) focusEditor();
+}, { capture: true });
+window.addEventListener('blur', () => { editorAltGesture = false; });
+
 app.addEventListener('click', e => {
   const button = (e.target as HTMLElement).closest('button');
   if (button && !button.closest('dialog')) queueMicrotask(focusEditor);
